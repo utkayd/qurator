@@ -85,6 +85,7 @@ The central entity. One row per dynamic QR code.
 | `styling_id` | TEXT | NOT NULL, FK → `styling_profiles.id` | |
 | `blob_key` | TEXT | NOT NULL | Key of the rendered image in the blob store |
 | `blob_etag` | TEXT | NOT NULL | Serves conditional requests without a blob round-trip |
+| `version` | INTEGER | NOT NULL, default 1 | Incremented on every mutation; the `If-Match` value |
 | `created_at` | TIMESTAMP | NOT NULL | |
 | `updated_at` | TIMESTAMP | NOT NULL | |
 | `deleted_at` | TIMESTAMP | NULL | Soft delete; the row and its alias survive |
@@ -130,6 +131,11 @@ must stay reserved (FR-018) — see `alias_reservations`.
 - `short_code` is immutable after creation. There is no update path for it, by design: a
   mutable short code would let a printed code be repointed by reassignment, defeating the
   destination-allow-list check entirely.
+- **Optimistic concurrency uses `version`, not `updated_at`.** Every mutation runs
+  `UPDATE ... SET version = version + 1 WHERE id = ? AND version = ?`; zero rows affected
+  means the caller lost the race and receives `ErrConflict`. A timestamp cannot do this
+  job — HTTP-date has one-second granularity, and two edits inside the same second would
+  both pass — and a compare-and-increment on an integer is dialect-neutral.
 
 ## Entity: `alias_reservations`
 

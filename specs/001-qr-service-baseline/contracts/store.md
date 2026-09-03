@@ -58,14 +58,14 @@ type Store interface {
     GetCodeByShortCode(ctx context.Context, shortCode string) (*domain.Code, error)
     GetCodeByID(ctx context.Context, id, userID string) (*domain.Code, error)
     ListCodes(ctx context.Context, f domain.CodeFilter) ([]*domain.Code, string, error)
-    UpdateDestination(ctx context.Context, id, userID, dest string, expectedUpdatedAt time.Time) error
+    UpdateDestination(ctx context.Context, id, userID, dest string, expectedVersion int64) error
     SetCodeState(ctx context.Context, id, userID string, state domain.CodeState) error
     DeleteCode(ctx context.Context, id, userID string) error
 
     // Aliases
     ReserveAlias(ctx context.Context, shortCode, codeID string) error
     IsAliasAvailable(ctx context.Context, shortCode string) (bool, error)
-    ReleaseAlias(ctx context.Context, shortCode string) error // admin only
+    ReleaseAlias(ctx context.Context, shortCode string) error // admin only; ErrConflict if the owning code is not deleted
 
     // Analytics
     InsertScanBatch(ctx context.Context, events []domain.ScanEvent) error
@@ -96,8 +96,10 @@ why it is pinned:
    not the row and not `ErrForbidden` — an existence oracle would let one user enumerate
    another's codes.
 6. **Optimistic concurrency.** Two `UpdateDestination` calls with the same
-   `expectedUpdatedAt` — exactly one succeeds, the other returns `ErrConflict`. This is the
-   spec's concurrent-edit edge case; without it the losing write vanishes silently.
+   `expectedVersion` — exactly one succeeds and the row's `version` is now
+   `expectedVersion + 1`; the other returns `ErrConflict`. This is the spec's concurrent-edit
+   edge case; without it the losing write vanishes silently. The suite issues both calls
+   within the same second deliberately, so a driver that cheats with a timestamp fails.
 7. **`InsertScanBatch` is atomic** — a batch containing one bad row inserts nothing.
 8. **Rollups equal raw counts.** After inserting a known batch, every dimension breakdown
    sums to the total for the same range. This is FR-023's invariant, asserted directly.

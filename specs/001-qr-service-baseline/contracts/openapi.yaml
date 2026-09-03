@@ -1,0 +1,1907 @@
+openapi: 3.1.0
+
+info:
+  title: qurator API
+  version: "1.0.0"
+  summary: Self-hostable QR code service — ephemeral generation, dynamic codes, redirects, analytics, tokens.
+  description: |
+    qurator is a single self-hostable service exposing:
+
+    - **Ephemeral generation** (`/v1/qr`): render a QR image from content and styling with no
+      storage side effect (FR-001..FR-006).
+    - **Dynamic codes** (`/v1/codes`): persisted, mutable-destination codes with a stable
+      printed image (FR-007..FR-018).
+    - **Public redirect and image serving** (`/r/{code}`, `/i/{id}.{ext}`): unauthenticated,
+      latency-sensitive, and structurally isolated from the analytics and metadata write path
+      (FR-009, FR-015, FR-017).
+    - **Analytics** (`/v1/codes/{id}/analytics`): totals, a time series, and per-dimension
+      breakdowns — deliberately with **no geographic dimension** and **no stored scanner IP**
+      in v1 (FR-022, FR-025).
+    - **Identity and tokens** (`/v1/auth/*`, `/v1/tokens`): one credential-verification path
+      for both browser sessions and machine tokens (FR-031..FR-038).
+    - **Export** (`/v1/export`): a streaming, machine-readable dump of everything an operator
+      needs to walk away with (FR-055).
+
+    ### Authentication
+
+    Two schemes are accepted **interchangeably** on every protected operation: a bearer API
+    token (`Authorization: Bearer qur_<secret>`) or the HttpOnly session cookie set at sign-in.
+    Public operations (the redirect, the stored image, health checks, sign-in itself) declare
+    `security: []` explicitly so "no auth here" is unambiguous rather than inferred from
+    absence.
+
+    Ephemeral generation (`/v1/qr`) requires a credential **by default** (FR-006); an operator
+    may explicitly enable unauthenticated access subject to a rate limit. Both possibilities
+    are documented on that operation.
+
+    ### CSRF
+
+    Any state-changing operation reachable via the session cookie MUST carry the
+    `X-Qurator-Requested-With` header (any non-empty value, e.g. `qurator-console`). This is a
+    same-origin assertion that defeats simple cross-site form submission; it is **not**
+    required when the caller authenticates with a bearer token, since bearer tokens are never
+    sent implicitly by a browser.
+
+    ### Errors
+
+    Every error response, on every operation, uses exactly one shape: `ErrorResponse`. There
+    is no second error shape anywhere in this API.
+
+    ### Not on this listener
+
+    `/metrics` is intentionally **not** exposed here. Per Principle VIII / FR-051, Prometheus
+    metrics are served on a separate internal-only listener address, so this public/API
+    listener carries no operational surface that could be exposed to the internet by mistake.
+  license:
+    name: Apache-2.0
+    identifier: Apache-2.0
+
+servers:
+  - url: /
+    description: The qurator instance (same origin serves API, console, and redirects)
+
+tags:
+  - name: public
+    description: Unauthenticated, latency-sensitive endpoints — scan redirect and stored image serving.
+  - name: generation
+    description: Ephemeral QR rendering with no storage side effect.
+  - name: codes
+    description: Dynamic, persisted QR codes with mutable destinations.
+  - name: analytics
+    description: Per-code scan totals, trends, and dimension breakdowns.
+  - name: auth
+    description: Sign-in, sign-out, and current-user identity.
+  - name: tokens
+    description: Revocable API token management.
+  - name: admin
+    description: Administrator-only operations; require `is_admin`.
+  - name: export
+    description: Streaming machine-readable data export.
+  - name: operations
+    description: Liveness and readiness signals.
+
+security:
+  - bearerAuth: []
+  - cookieAuth: []
+
+paths:
+
+  # ---------------------------------------------------------------------
+  # Public, unauthenticated
+  # ---------------------------------------------------------------------
+
+  /r/{code}:
+    get:
+      operationId: redirectScan
+      tags: [public]
+      summary: Resolve a short code and redirect the scanner
+      description: |
+        Resolves `code` to its current destination and issues a redirect (FR-009). This path
+        carries no authentication middleware whatsoever (Principle IV) and performs at most
+        one metadata lookup, fronted by an in-process cache with a bounded staleness window
+        (FR-017).
+
+        **Why `302` and not `301`/`308`.** A permanent redirect status is heuristically
+        cached indefinitely by browsers and intermediaries. Because a dynamic code's whole
+        purpose is that its destination can change after printing (US2), a cached permanent
+        redirect would silently keep sending scanners to a stale destination and would stop
+        the scan from ever reaching the instance to be counted. `302` is paired with
+        `Cache-Control: no-store, no-cache, must-revalidate` so every scan reaches the
+        instance, keeping destination changes effective within seconds (SC-008) and analytics
+        accurate (FR-020).
+
+        An unknown, disabled, or deleted code does **not** error — it returns a clear,
+        non-error-looking landing response rather than a redirect (FR-014), so a scan of a
+        retired code never looks like a broken page and is never expensive enough to serve as
+        an enumeration vector.
+      security: []
+      parameters:
+        - name: code
+          in: path
+          required: true
+          description: The short code or custom alias, matched case-insensitively.
+          schema:
+            $ref: '#/components/schemas/ShortCode'
+      responses:
+        '302':
+          description: |
+            The code is active. The scanner is redirected to its current destination.
+            Always non-cacheable so the next scan re-resolves the destination.
+          headers:
+            Location:
+              description: The code's current destination URL.
+              schema:
+                type: string
+                format: uri
+              example: https://example.com/spring-sale
+            Cache-Control:
+              description: Prevents any intermediary from caching this redirect.
+              schema:
+                type: string
+                enum: ["no-store, no-cache, must-revalidate"]
+              example: "no-store, no-cache, must-revalidate"
+        '200':
+          description: |
+            The code is unknown, disabled, or deleted. A human-readable landing page is
+            returned (FR-014) — never a stack trace, never a generic server error, and never
+            a silent redirect to an unexpected destination. If the operator has configured a
+            fallback destination for this case, the landing response says so.
+          content:
+            text/html:
+              schema:
+                type: string
+        '5XX':
+          description: Unexpected server error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /i/{id}.{ext}:
+    get:
+      operationId: getStoredImage
+      tags: [public]
+      summary: Fetch a dynamic code's stored rendered image
+      description: |
+        Serves a dynamic code's persisted image by its blob identifier, unauthenticated
+        (FR-015). Supports conditional requests via `If-None-Match` against the stored
+        `blob_etag`, so a client holding a cached copy can confirm freshness without a full
+        blob-store round trip. If the blob store is unavailable, this endpoint may fail, but
+        that failure never affects `/r/{code}` — scan redirects do not depend on image
+        retrieval (Edge Cases: "Blob store unavailable").
+      security: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: The code's blob identifier (its `id`, not its short code).
+          schema:
+            $ref: '#/components/schemas/CodeId'
+        - name: ext
+          in: path
+          required: true
+          description: Requested image format.
+          schema:
+            type: string
+            enum: [png, svg]
+          example: png
+        - name: If-None-Match
+          in: header
+          required: false
+          schema:
+            type: string
+          example: '"a1b2c3d4"'
+      responses:
+        '200':
+          description: The rendered image.
+          headers:
+            ETag:
+              schema:
+                type: string
+              example: '"a1b2c3d4"'
+            Cache-Control:
+              schema:
+                type: string
+              example: "public, max-age=31536000, immutable"
+          content:
+            image/png:
+              schema:
+                type: string
+                contentEncoding: binary
+            image/svg+xml:
+              schema:
+                type: string
+        '304':
+          description: The client's cached copy (matched by `If-None-Match`) is still current.
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '5XX':
+          description: Unexpected server error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  # ---------------------------------------------------------------------
+  # Ephemeral generation
+  # ---------------------------------------------------------------------
+
+  /v1/qr:
+    get:
+      operationId: generateQrGet
+      tags: [generation]
+      summary: Render an ephemeral QR image (query-string form)
+      description: |
+        Renders content directly to image bytes with **no metadata-store or blob-store
+        record created** (FR-001, FR-003). Identical input produces byte-identical output, so
+        responses are safely cacheable by intermediaries (FR-004).
+
+        **Authentication**: required by default (FR-006). An operator may explicitly set
+        `generation.allow_unauthenticated: true`, in which case this operation accepts
+        anonymous requests subject to a configurable rate limit — the two modes are described
+        together here because the same operation behaves differently under each, not because
+        both apply at once on a given instance.
+
+        Use `GET` for simple content that fits in a URL; use `POST` (below) when content or
+        styling would make the query string unwieldy or when content contains characters
+        awkward to percent-encode.
+      security:
+        - bearerAuth: []
+        - cookieAuth: []
+        - {}
+      parameters:
+        - name: content
+          in: query
+          required: true
+          description: The payload to encode. Maximum length depends on the effective EC level (2953 bytes at L, down to 1273 at H).
+          schema:
+            type: string
+          example: "https://example.com/hello"
+        - name: format
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/ImageFormat'
+        - name: fg_color
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/HexColor'
+        - name: bg_color
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/HexColor'
+        - name: module_shape
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/ModuleShape'
+        - name: margin_modules
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/MarginModules'
+        - name: size_px
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/SizePx'
+        - name: ec_level
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/EcLevel'
+      responses:
+        '200':
+          $ref: '#/components/responses/RenderedImage'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '413':
+          $ref: '#/components/responses/ContentTooLarge'
+        '422':
+          $ref: '#/components/responses/UnprocessableStyling'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '5XX':
+          description: Unexpected server error, or a render that exceeded the maximum rendering duration.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    post:
+      operationId: generateQrPost
+      tags: [generation]
+      summary: Render an ephemeral QR image (JSON body form)
+      description: |
+        Identical semantics to `GET /v1/qr`, accepting content and styling as a JSON body.
+        Preferred for binary or large content, or a full styling object including a logo.
+        See `GET /v1/qr` for the authentication and no-storage-record guarantees, which apply
+        identically here.
+      security:
+        - bearerAuth: []
+        - cookieAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GenerateQrRequest'
+            example:
+              content: "https://example.com/hello"
+              format: png
+              styling:
+                fg_color: "#101828"
+                bg_color: "#FFFFFF"
+                module_shape: dot
+                margin_modules: 4
+                size_px: 512
+                ec_level: M
+      responses:
+        '200':
+          $ref: '#/components/responses/RenderedImage'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '413':
+          $ref: '#/components/responses/ContentTooLarge'
+        '422':
+          $ref: '#/components/responses/UnprocessableStyling'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '5XX':
+          description: Unexpected server error, or a render that exceeded the maximum rendering duration.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  # ---------------------------------------------------------------------
+  # Dynamic codes
+  # ---------------------------------------------------------------------
+
+  /v1/codes:
+    get:
+      operationId: listCodes
+      tags: [codes]
+      summary: List the caller's dynamic codes
+      description: Paginated, and filterable by creation time and by destination (FR-016).
+      parameters:
+        - name: cursor
+          in: query
+          required: false
+          schema:
+            type: string
+          example: "eyJpZCI6ImNvZF9hYmMxMjMifQ"
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+        - name: created_after
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+        - name: created_before
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+        - name: destination_contains
+          in: query
+          required: false
+          description: Case-insensitive substring filter over the current destination URL.
+          schema:
+            type: string
+          example: "example.com"
+      responses:
+        '200':
+          description: A page of the caller's codes.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CodePage'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '5XX':
+          description: Unexpected server error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    post:
+      operationId: createCode
+      tags: [codes]
+      summary: Create a dynamic code
+      description: |
+        Creates a persisted code with a mutable destination (FR-007). If `alias` is omitted, a
+        system-generated, unguessable, collision-resistant short code is assigned (FR-013). If
+        `alias` is supplied, it is validated per FR-018: unique case-insensitively, restricted
+        to a safe URL character set, not on the reserved-word list, and not previously used by
+        a deleted code (unless an administrator has explicitly released it). Aliases are
+        **immutable** once created.
+
+        The response's `image_url` points at the code's persisted rendered image; the QR's
+        *encoded* payload is always this instance's own scan address for the code
+        (`/r/{short_code}`), never the destination directly — that indirection is what lets
+        the destination change later without reprinting anything.
+      parameters:
+        - $ref: '#/components/parameters/CsrfHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateCodeRequest'
+            example:
+              destination: "https://example.com/spring-sale"
+              alias: "spring-sale"
+              styling:
+                fg_color: "#101828"
+                bg_color: "#FFFFFF"
+                module_shape: rounded
+                margin_modules: 4
+                size_px: 1024
+                ec_level: Q
+      responses:
+        '201':
+          description: The code was created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Code'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/UnprocessableStyling'
+        '5XX':
+          description: Unexpected server error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /v1/codes/{id}:
+    get:
+      operationId: getCode
+      tags: [codes]
+      summary: Get a single dynamic code
+      parameters:
+        - $ref: '#/components/parameters/CodeIdPath'
+      responses:
+        '200':
+          description: The code.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Code'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '5XX':
+          description: Unexpected server error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    patch:
+      operationId: updateCodeDestination
+      tags: [codes]
+      summary: Update a dynamic code's destination
+      description: |
+        Changes only the destination (FR-008). The encoded QR value and the stored image are
+        never altered by this operation (FR-010) — restyling is not available on an existing
+        code; a differently styled printed artefact is a new code (spec Assumptions:
+        "Image immutability").
+
+        The new destination is validated against the configured scheme allow-list and against
+        self-referential resolution (loop back to this instance's own `/r/` path), exactly as
+        on creation (FR-011, FR-012). On rejection, the existing destination is left unchanged.
+
+        Concurrent edits are resolved deterministically by an optimistic-concurrency check:
+        pass the code's current `version` as a quoted entity-tag in `If-Match`
+        (e.g. `If-Match: "7"`), or accept last-write-wins semantics by omitting it. A losing
+        conditional write is refused with `409` and the current version in `details`, never
+        silently discarded (Edge Cases: "Concurrent destination edits").
+
+        `If-Match` on an integer version is used rather than `If-Unmodified-Since` on
+        `updated_at` because HTTP-date has one-second granularity: two edits within the same
+        second would both pass a timestamp check, which is precisely the race this exists to
+        prevent.
+      parameters:
+        - $ref: '#/components/parameters/CodeIdPath'
+        - $ref: '#/components/parameters/CsrfHeader'
+        - name: If-Match
+          in: header
+          required: false
+          description: >-
+            The code's `version` last observed by the caller, as a quoted entity-tag
+            (e.g. `"7"`). Omit to accept last-write-wins.
+          schema:
+            type: string
+            pattern: '^"[0-9]+"$'
+            example: '"7"'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateDestinationRequest'
+            example:
+              destination: "https://example.com/spring-sale-2026"
+      responses:
+        '200':
+          description: The updated code.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Code'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '5XX':
+          description: Unexpected server error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    delete:
+      operationId: deleteCode
+      tags: [codes]
+      summary: Soft-delete a dynamic code
+      description: |
+        Marks the code `deleted` (terminal). Its short code / alias remains reserved and
+        cannot be reassigned to a different code (FR-018), so a printed artefact can never be
+        hijacked by a later registration. A subsequent scan returns the disabled/deleted
+        landing response, not a redirect.
+      parameters:
+        - $ref: '#/components/parameters/CodeIdPath'
+        - $ref: '#/components/parameters/CsrfHeader'
+      responses:
+        '204':
+          description: The code was deleted.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '5XX':
+          description: Unexpected server error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /v1/codes/{id}/disable:
+    post:
+      operationId: disableCode
+      tags: [codes]
+      summary: Disable a dynamic code
+      description: |
+        Transitions the code from `active` to `disabled`. A disabled code's scans receive the
+        non-error landing response rather than a redirect (FR-014); the code can later be
+        re-enabled.
+      parameters:
+        - $ref: '#/components/parameters/CodeIdPath'
+        - $ref: '#/components/parameters/CsrfHeader'
+      responses:
+        '200':
+          description: The code, now disabled.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Code'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: The code is `deleted`, which is terminal and cannot transition back to `disabled`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '5XX':
+          description: Unexpected server error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /v1/codes/{id}/enable:
+    post:
+      operationId: enableCode
+      tags: [codes]
+      summary: Re-enable a disabled dynamic code
+      parameters:
+        - $ref: '#/components/parameters/CodeIdPath'
+        - $ref: '#/components/parameters/CsrfHeader'
+      responses:
+        '200':
+          description: The code, now active.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Code'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: The code is `deleted`, which is terminal and cannot transition back to `active`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '5XX':
+          description: Unexpected server error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  # ---------------------------------------------------------------------
+  # Analytics
+  # ---------------------------------------------------------------------
+
+  /v1/codes/{id}/analytics:
+    get:
+      operationId: getCodeAnalytics
+      tags: [analytics]
+      summary: Total scans, a time series, and per-dimension breakdowns for a code
+      description: |
+        Returns, for the requested time range: the total scan count, a time-bucketed series,
+        and a breakdown per recorded dimension — each breakdown's counts sum to the overall
+        total for the same range, by construction (FR-023; data-model.md `scan_rollups` is
+        written in the same transaction as the raw event).
+
+        **Deliberately absent**: any geographic dimension. Geography is excluded from v1 by
+        design (FR-025) — every way to derive it requires either an embedded/downloaded
+        location dataset or a mandatory upstream proxy, either of which would make an external
+        dependency compulsory and break self-hostability. It is not merely unimplemented.
+
+        **Deliberately absent**: any scanner network address, in any field, at any
+        granularity (FR-022). No response from this API — nor any row in storage — ever
+        carries an IP address.
+
+        Individual scan events older than the configured retention period are pruned, but
+        aggregate totals (the rollups this endpoint reads) are retained indefinitely and
+        remain available beyond that period (FR-024).
+      parameters:
+        - $ref: '#/components/parameters/CodeIdPath'
+        - name: from
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date-time
+          example: "2026-08-01T00:00:00Z"
+        - name: to
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date-time
+          example: "2026-09-01T00:00:00Z"
+        - name: bucket
+          in: query
+          required: false
+          description: Time-series granularity.
+          schema:
+            type: string
+            enum: [hour, day, week]
+            default: day
+      responses:
+        '200':
+          description: Analytics for the code over the requested range.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CodeAnalytics'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '5XX':
+          description: Unexpected server error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  # ---------------------------------------------------------------------
+  # Auth
+  # ---------------------------------------------------------------------
+
+  /v1/auth/signin:
+    post:
+      operationId: signIn
+      tags: [auth]
+      summary: Sign in with local credentials
+      description: |
+        Verifies email and password against the local account (irrelevant when the caller is
+        authenticated exclusively via a forward-auth proxy; see FR-036). On success, sets the
+        HttpOnly session cookie. There is no self-service registration or password reset
+        (FR-039) — only the bootstrap admin account and any accounts it creates can sign in
+        this way.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SignInRequest'
+            example:
+              email: admin@example.com
+              password: "correct horse battery staple"
+      responses:
+        '200':
+          description: Signed in. The session cookie is set via `Set-Cookie`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '5XX':
+          description: Unexpected server error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /v1/auth/signout:
+    post:
+      operationId: signOut
+      tags: [auth]
+      summary: Sign out and clear the session cookie
+      parameters:
+        - $ref: '#/components/parameters/CsrfHeader'
+      responses:
+        '204':
+          description: Signed out.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '5XX':
+          description: Unexpected server error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /v1/auth/me:
+    get:
+      operationId: getCurrentUser
+      tags: [auth]
+      summary: The identity of the caller, however authenticated
+      description: |
+        Resolves the caller — bearer token, session cookie, or a trusted forward-auth
+        assertion — through the single unified identity-verification path (FR-031).
+      responses:
+        '200':
+          description: The current caller's identity.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '5XX':
+          description: Unexpected server error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  # ---------------------------------------------------------------------
+  # API tokens
+  # ---------------------------------------------------------------------
+
+  /v1/tokens:
+    get:
+      operationId: listTokens
+      tags: [tokens]
+      summary: List the caller's API tokens
+      description: |
+        Never returns a token's secret value — only its metadata. The secret exists solely at
+        the moment of creation (FR-033); it is stored only as an irreversible hash (FR-034)
+        and cannot be reconstructed or displayed again by any surface, including this one.
+      responses:
+        '200':
+          description: The caller's tokens.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ApiTokenSummary'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '5XX':
+          description: Unexpected server error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    post:
+      operationId: createToken
+      tags: [tokens]
+      summary: Create a new API token
+      description: |
+        Creates a named, revocable machine credential. **The response's `secret` field is
+        the only time this value is ever available anywhere** — not from this endpoint again,
+        not from `GET /v1/tokens`, not from the console, not from any export. Store it
+        immediately; if it is lost, the only remedy is to revoke the token and create a new
+        one (FR-033).
+      parameters:
+        - $ref: '#/components/parameters/CsrfHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateTokenRequest'
+            example:
+              name: "ci-pipeline"
+              expires_at: "2027-09-04T00:00:00Z"
+      responses:
+        '201':
+          description: The token was created. This is the only response that ever carries `secret`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiTokenCreated'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '5XX':
+          description: Unexpected server error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /v1/tokens/{id}:
+    delete:
+      operationId: revokeToken
+      tags: [tokens]
+      summary: Revoke an API token
+      description: |
+        Takes effect immediately, with no service restart required (FR-035); a revoked
+        token's next use is refused (SC-011). This operation is idempotent: revoking an
+        already-revoked token still returns `204`.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/TokenId'
+        - $ref: '#/components/parameters/CsrfHeader'
+      responses:
+        '204':
+          description: The token is revoked (or was already revoked).
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '5XX':
+          description: Unexpected server error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  # ---------------------------------------------------------------------
+  # Admin
+  # ---------------------------------------------------------------------
+  /v1/admin/aliases/{alias}:
+    delete:
+      operationId: releaseAlias
+      tags: [admin]
+      summary: Release a retired alias (administrator only)
+      description: |
+        The explicit administrator escape hatch named in FR-018. A deleted code's alias stays
+        reserved indefinitely so that already-printed artefacts can never be captured by a
+        later registration. This is the only way to make such an alias registrable again.
+
+        Requires `is_admin`. Non-administrators receive `403` — not `404` — because the
+        caller is asking about an alias, not a code they might or might not own, so there is
+        no existence oracle to protect. Only aliases whose owning code is `deleted` can be
+        released; releasing an alias still attached to a live code returns `409`.
+
+        Releasing is deliberately not idempotent: a second release of an already-released or
+        never-reserved alias returns `404`, so an operator running this by hand learns
+        whether it actually did anything.
+      parameters:
+        - name: alias
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/ShortCode'
+        - $ref: '#/components/parameters/CsrfHeader'
+      responses:
+        '204':
+          description: The alias is released and may be registered again.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '5XX':
+          description: Unexpected server error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  # ---------------------------------------------------------------------
+  # Export
+  # ---------------------------------------------------------------------
+
+  /v1/export:
+    get:
+      operationId: exportData
+      tags: [export]
+      summary: Stream a full export of the caller's data
+      description: |
+        Streams every code, destination, styling profile, and scan aggregate as newline-
+        delimited JSON (FR-055), one JSON object per line, so the response can be processed
+        without buffering it entirely in memory. Intended for an operator to migrate to a
+        fresh instance or simply to walk away with their data (US7, SC-013). Instance
+        configuration is never included, since it is never persisted or returned by any
+        endpoint (FR-049).
+      parameters:
+        - name: kind
+          in: query
+          required: false
+          description: Restrict the export to one record kind. Omit to export all kinds.
+          schema:
+            type: string
+            enum: [code, styling_profile, scan_aggregate]
+      responses:
+        '200':
+          description: |
+            A streamed newline-delimited JSON body. Each line is one `ExportRecord`; the
+            `kind` field discriminates which of `code`, `styling_profile`, or
+            `scan_aggregate` its `data` object holds.
+          content:
+            application/x-ndjson:
+              schema:
+                $ref: '#/components/schemas/ExportRecord'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '5XX':
+          description: Unexpected server error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  # ---------------------------------------------------------------------
+  # Operational
+  # ---------------------------------------------------------------------
+
+  /healthz:
+    get:
+      operationId: getLiveness
+      tags: [operations]
+      summary: Liveness probe
+      description: |
+        Succeeds whenever the process is running and able to serve, independent of storage
+        health (FR-050) — a broken database or object store never fails this check. Intended
+        for a container orchestrator's liveness probe, which should restart the process only
+        when it is truly wedged, not merely when a dependency is unavailable.
+      security: []
+      responses:
+        '200':
+          description: The process is alive.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthStatus'
+
+  /readyz:
+    get:
+      operationId: getReadiness
+      tags: [operations]
+      summary: Readiness probe
+      description: |
+        Reflects the health of configured storage backends (metadata store and blob store).
+        Intended for a load balancer or orchestrator to withhold traffic while a dependency is
+        unavailable, distinct from `/healthz` (FR-050).
+      security: []
+      responses:
+        '200':
+          description: All configured storage backends are healthy.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthStatus'
+        '503':
+          description: At least one configured storage backend is unhealthy.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthStatus'
+
+components:
+
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: "qur_<base64url secret>"
+      description: |
+        An API token, presented as `Authorization: Bearer qur_<base64url of 32 random
+        bytes>`. Verified through the same identity-resolution path as `cookieAuth` (FR-031).
+        Bearer-authenticated requests do NOT need the `X-Qurator-Requested-With` CSRF header,
+        since a bearer token is never sent implicitly by a browser.
+    cookieAuth:
+      type: apiKey
+      in: cookie
+      name: qurator_session
+      description: |
+        An HttpOnly, `Secure`, `SameSite=Lax` session cookie set by `POST /v1/auth/signin`,
+        restricted to this instance's origin. State-changing operations authenticated this
+        way MUST also carry the `X-Qurator-Requested-With` header (see the `CsrfHeader`
+        parameter) as a same-origin assertion.
+
+  parameters:
+    CodeIdPath:
+      name: id
+      in: path
+      required: true
+      description: The code's opaque identifier (`cod_...`), not its short code.
+      schema:
+        $ref: '#/components/schemas/CodeId'
+    CsrfHeader:
+      name: X-Qurator-Requested-With
+      in: header
+      required: false
+      description: |
+        Required when the caller is authenticated via `cookieAuth` on any state-changing
+        operation; any non-empty value is accepted (e.g. `qurator-console`). Not required for
+        `bearerAuth`-authenticated calls. Its absence on a cookie-authenticated
+        state-changing request is refused with `403 forbidden` — the request is treated as
+        unauthenticated-for-CSRF-purposes rather than silently applied.
+      schema:
+        type: string
+      example: qurator-console
+
+  responses:
+    RenderedImage:
+      description: |
+        The rendered QR image. Identical input produces byte-identical bytes (FR-004), so
+        this response is safe for an intermediary to cache. No record of the request is kept
+        in any datastore (FR-001).
+      headers:
+        Content-Type:
+          schema:
+            type: string
+            enum: [image/png, image/svg+xml]
+      content:
+        image/png:
+          schema:
+            type: string
+            contentEncoding: binary
+        image/svg+xml:
+          schema:
+            type: string
+
+    BadRequest:
+      description: The request is malformed or fails basic validation.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error:
+              code: invalid_request
+              message: "'destination' must be an absolute URL."
+
+    ContentTooLarge:
+      description: The content payload exceeds the maximum encodable size for the requested (or effective) error correction level.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error:
+              code: content_too_large
+              message: "Content is 3120 bytes; the maximum at error correction level L is 2953 bytes."
+              details:
+                ec_level: L
+                max_bytes: 2953
+                actual_bytes: 3120
+
+    UnprocessableStyling:
+      description: |
+        The requested styling combination would render the code unscannable — insufficient
+        contrast, a logo exceeding the recoverable area for the effective EC level, or
+        dimensions/duration exceeding the configured bound (FR-028, FR-029).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            low_contrast:
+              value:
+                error:
+                  code: contrast_too_low
+                  message: "Foreground/background contrast is 1.9:1; at least 3:1 is required."
+                  details:
+                    contrast_ratio: 1.9
+                    minimum_required: 3.0
+            logo_too_large:
+              value:
+                error:
+                  code: logo_too_large
+                  message: "Logo covers 30% of the symbol; the maximum at error correction level Q is 20%."
+                  details:
+                    ec_level: Q
+                    max_logo_area_pct: 20
+                    requested_logo_area_pct: 30
+            dimensions_exceeded:
+              value:
+                error:
+                  code: dimensions_exceeded
+                  message: "Requested size 8192px exceeds the configured maximum of 4096px."
+                  details:
+                    max_size_px: 4096
+                    requested_size_px: 8192
+
+    Unauthorized:
+      description: No valid credential was presented.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error:
+              code: unauthorized
+              message: "A valid session or API token is required."
+
+    Forbidden:
+      description: |
+        The credential is valid but does not permit this operation — including a missing or
+        invalid CSRF header on a cookie-authenticated state-changing request, and an
+        alias rejected as reserved.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error:
+              code: forbidden
+              message: "You do not own this code."
+
+    NotFound:
+      description: The resource does not exist, or exists but is not visible to the caller.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error:
+              code: not_found
+              message: "No code with that identifier exists."
+
+    Conflict:
+      description: |
+        The request conflicts with existing state — a taken or reserved alias, a losing
+        optimistic-concurrency write, or an invalid state transition.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            alias_taken:
+              value:
+                error:
+                  code: alias_taken
+                  message: "Alias 'spring-sale' is already in use."
+            alias_reserved:
+              value:
+                error:
+                  code: alias_reserved
+                  message: "Alias 'admin' is reserved for instance routes."
+            stale_write:
+              value:
+                error:
+                  code: conflict
+                  message: "The code was modified by another request since it was last read."
+
+    RateLimited:
+      description: The caller has exceeded the configured rate limit.
+      headers:
+        Retry-After:
+          schema:
+            type: integer
+          example: 30
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error:
+              code: rate_limited
+              message: "Rate limit exceeded for unauthenticated generation; retry after 30 seconds."
+              details:
+                retry_after_seconds: 30
+
+  schemas:
+
+    # -------------------- error --------------------
+
+    ErrorCode:
+      type: string
+      description: A stable, machine-readable error identifier. Never changes meaning across versions.
+      enum:
+        - invalid_request
+        - content_too_large
+        - unsupported_scheme
+        - self_referential_destination
+        - alias_taken
+        - alias_reserved
+        - alias_invalid
+        - contrast_too_low
+        - logo_too_large
+        - dimensions_exceeded
+        - render_timeout
+        - not_found
+        - code_disabled
+        - unauthorized
+        - forbidden
+        - token_revoked
+        - conflict
+        - rate_limited
+        - internal
+
+    ErrorDetail:
+      type: object
+      description: |
+        The single error shape used by every operation in this API. There is no alternate
+        error format anywhere. `details` is optional and, when present, carries structured
+        fields specific to `code` (e.g. the limit that was exceeded) — never a stack trace or
+        other internal detail (FR-044).
+      additionalProperties: false
+      required: [code, message]
+      properties:
+        code:
+          $ref: '#/components/schemas/ErrorCode'
+        message:
+          type: string
+          description: A human-readable explanation, safe to display to an end user.
+          example: "Content is 3120 bytes; the maximum at error correction level L is 2953 bytes."
+        details:
+          type: object
+          additionalProperties: true
+
+    ErrorResponse:
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error:
+          $ref: '#/components/schemas/ErrorDetail'
+      example:
+        error:
+          code: not_found
+          message: "No code with that identifier exists."
+
+    # -------------------- identifiers --------------------
+
+    CodeId:
+      type: string
+      description: Opaque, unguessable identifier for a dynamic code. Prefixed for grep-ability, never sequential.
+      pattern: '^cod_[0-9A-Za-z]{16}$'
+      example: cod_a1b2c3d4e5f6g7h8
+
+    TokenId:
+      type: string
+      description: Opaque identifier for an API token. Safe to log — never the secret.
+      pattern: '^tok_[0-9A-Za-z]{16}$'
+      example: tok_q1w2e3r4t5y6u7i8
+
+    UserId:
+      type: string
+      pattern: '^usr_[0-9A-Za-z]{16}$'
+      example: usr_z9y8x7w6v5u4t3s2
+
+    ShortCode:
+      type: string
+      description: |
+        Either a system-generated short code (12-character lowercase Crockford base32) or a
+        user-supplied alias (3-64 chars, `[a-z0-9-]`, alphanumeric first and last, no
+        consecutive hyphens). Matched case-insensitively.
+      minLength: 3
+      maxLength: 64
+      pattern: '^[a-z0-9]([a-z0-9-]*[a-z0-9])?$'
+      example: spring-sale
+
+    # -------------------- styling --------------------
+
+    ImageFormat:
+      type: string
+      enum: [png, svg]
+      default: png
+      description: Output image format; both are labeled with the correct content type (FR-002).
+
+    HexColor:
+      type: string
+      pattern: '^#[0-9A-Fa-f]{6}$'
+      description: An `#RRGGBB` color value.
+      example: "#101828"
+
+    ModuleShape:
+      type: string
+      enum: [square, dot, rounded]
+      default: square
+      description: The rendered shape of each QR module.
+
+    MarginModules:
+      type: integer
+      description: Quiet-zone width in modules. At least 4, per ISO/IEC 18004 §5.3.2.
+      minimum: 4
+      maximum: 64
+      default: 4
+
+    SizePx:
+      type: integer
+      description: Output image side length in pixels, for raster formats. Bounded by instance configuration (FR-029).
+      minimum: 64
+      maximum: 4096
+      default: 512
+
+    EcLevel:
+      type: string
+      description: |
+        Requested Reed-Solomon error correction level. Determines the maximum content payload:
+        L up to 2953 bytes, M up to 2331 bytes, Q up to 1663 bytes, H up to 1273 bytes (binary
+        mode, version 40). A center logo raises the *effective* level automatically as needed
+        to preserve decodability (FR-027); the requested level is preserved separately from the
+        effective one so a caller can always see whether it was raised.
+      enum: [L, M, Q, H]
+      default: M
+
+    LogoSpec:
+      type: object
+      description: |
+        A center logo overlay. Its recoverable area is capped as a percentage of the symbol,
+        by the *effective* error correction level: L 5%, M 12%, Q 20%, H 25%. A logo exceeding
+        the cap for every level up to H is rejected with `logo_too_large` (FR-028).
+      required: [image_base64]
+      properties:
+        image_base64:
+          type: string
+          contentEncoding: base64
+          description: The logo image, base64-encoded (PNG or JPEG).
+        scale:
+          type: number
+          format: double
+          description: Requested fraction of the symbol's module area the logo should occupy.
+          minimum: 0.01
+          maximum: 0.25
+          example: 0.15
+
+    StylingRequest:
+      type: object
+      description: Styling parameters supplied inline for ephemeral generation, or attached to a dynamic code at creation.
+      additionalProperties: false
+      properties:
+        fg_color:
+          $ref: '#/components/schemas/HexColor'
+        bg_color:
+          $ref: '#/components/schemas/HexColor'
+        module_shape:
+          $ref: '#/components/schemas/ModuleShape'
+        margin_modules:
+          $ref: '#/components/schemas/MarginModules'
+        size_px:
+          $ref: '#/components/schemas/SizePx'
+        ec_level:
+          $ref: '#/components/schemas/EcLevel'
+        logo:
+          $ref: '#/components/schemas/LogoSpec'
+
+    StylingProfile:
+      type: object
+      description: |
+        A dynamic code's stored styling, immutable once attached (spec Assumptions: "Image
+        immutability") — restyling creates a new code rather than mutating a printed one.
+      additionalProperties: false
+      required: [fg_color, bg_color, module_shape, margin_modules, size_px, ec_level, ec_level_effective]
+      properties:
+        fg_color:
+          $ref: '#/components/schemas/HexColor'
+        bg_color:
+          $ref: '#/components/schemas/HexColor'
+        module_shape:
+          $ref: '#/components/schemas/ModuleShape'
+        margin_modules:
+          $ref: '#/components/schemas/MarginModules'
+        size_px:
+          $ref: '#/components/schemas/SizePx'
+        ec_level:
+          allOf:
+            - $ref: '#/components/schemas/EcLevel'
+          description: The level as originally *requested*.
+        ec_level_effective:
+          allOf:
+            - $ref: '#/components/schemas/EcLevel'
+          description: The level actually used, after any automatic raise for a logo (FR-027).
+        has_logo:
+          type: boolean
+          default: false
+
+    # -------------------- generation --------------------
+
+    GenerateQrRequest:
+      type: object
+      additionalProperties: false
+      required: [content]
+      properties:
+        content:
+          type: string
+          description: The payload to encode. Maximum length depends on the effective EC level.
+          example: "https://example.com/hello"
+        format:
+          $ref: '#/components/schemas/ImageFormat'
+        styling:
+          $ref: '#/components/schemas/StylingRequest'
+
+    # -------------------- codes --------------------
+
+    CodeState:
+      type: string
+      enum: [active, disabled, deleted]
+
+    Code:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - short_code
+        - is_alias
+        - destination
+        - state
+        - styling
+        - image_url
+        - scan_url
+        - version
+        - created_at
+        - updated_at
+      properties:
+        id:
+          $ref: '#/components/schemas/CodeId'
+        short_code:
+          $ref: '#/components/schemas/ShortCode'
+        version:
+          type: integer
+          minimum: 1
+          description: >-
+            Monotonic edit counter, incremented on every successful mutation. Send it back
+            as `If-Match` on `PATCH` for optimistic concurrency.
+        is_alias:
+          type: boolean
+          description: True if `short_code` is a user-chosen alias; false if system-generated.
+        destination:
+          type: string
+          format: uri
+          description: The current scan target. Mutable; changing it never alters the encoded QR value (FR-010).
+        state:
+          $ref: '#/components/schemas/CodeState'
+        styling:
+          $ref: '#/components/schemas/StylingProfile'
+        image_url:
+          type: string
+          format: uri
+          description: Where the persisted rendered image can be fetched (`GET /i/{id}.{ext}`).
+        scan_url:
+          type: string
+          format: uri
+          description: This instance's scan address encoded into the QR symbol (`/r/{short_code}`).
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+      example:
+        id: cod_a1b2c3d4e5f6g7h8
+        short_code: spring-sale
+        is_alias: true
+        destination: "https://example.com/spring-sale"
+        state: active
+        styling:
+          fg_color: "#101828"
+          bg_color: "#FFFFFF"
+          module_shape: rounded
+          margin_modules: 4
+          size_px: 1024
+          ec_level: Q
+          ec_level_effective: Q
+          has_logo: false
+        image_url: "https://qurator.example.com/i/cod_a1b2c3d4e5f6g7h8.png"
+        scan_url: "https://qurator.example.com/r/spring-sale"
+        version: 1
+        created_at: "2026-08-01T12:00:00Z"
+        updated_at: "2026-08-01T12:00:00Z"
+
+    CreateCodeRequest:
+      type: object
+      additionalProperties: false
+      required: [destination]
+      properties:
+        destination:
+          type: string
+          format: uri
+          description: |
+            Must use a permitted scheme (default: `http`, `https` only; FR-011) and must not
+            resolve back to this instance's own `/r/` path (FR-012).
+        alias:
+          allOf:
+            - $ref: '#/components/schemas/ShortCode'
+          description: |
+            Optional custom alias. Omit to receive a system-generated short code. Immutable
+            once set (FR-018).
+        styling:
+          $ref: '#/components/schemas/StylingRequest'
+
+    UpdateDestinationRequest:
+      type: object
+      additionalProperties: false
+      required: [destination]
+      properties:
+        destination:
+          type: string
+          format: uri
+          description: Re-validated against the scheme allow-list and self-referential-destination check on every update (FR-011).
+
+    CodePage:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Code'
+        next_cursor:
+          type: [string, "null"]
+          description: Pass as `cursor` to fetch the next page. Absent or null on the last page.
+
+    # -------------------- analytics --------------------
+
+    AnalyticsSeriesPoint:
+      type: object
+      additionalProperties: false
+      required: [bucket_start, count]
+      properties:
+        bucket_start:
+          type: string
+          format: date-time
+        count:
+          type: integer
+          minimum: 0
+
+    AnalyticsBreakdownEntry:
+      type: object
+      additionalProperties: false
+      required: [value, count]
+      properties:
+        value:
+          type: string
+          description: The dimension's value, e.g. a UA family name, a device category, or a referrer host.
+        count:
+          type: integer
+          minimum: 0
+
+    AnalyticsDimension:
+      type: string
+      description: |
+        A recorded scan dimension. There is deliberately no `geography` value in this v1 API
+        (FR-025) — it is not omitted by oversight, it is excluded by design.
+      enum: [ua_family, device_category, referrer_host, is_bot]
+
+    CodeAnalytics:
+      type: object
+      description: |
+        Every dimension's breakdown counts sum to `total` for the requested range, by
+        construction (FR-023). No field here or anywhere else in this API ever carries a
+        scanner's network address (FR-022).
+      additionalProperties: false
+      required: [code_id, from, to, total, series, breakdowns]
+      properties:
+        code_id:
+          $ref: '#/components/schemas/CodeId'
+        from:
+          type: string
+          format: date-time
+        to:
+          type: string
+          format: date-time
+        total:
+          type: integer
+          minimum: 0
+        series:
+          type: array
+          items:
+            $ref: '#/components/schemas/AnalyticsSeriesPoint'
+        breakdowns:
+          type: object
+          description: Keyed by `AnalyticsDimension` value.
+          propertyNames:
+            $ref: '#/components/schemas/AnalyticsDimension'
+          additionalProperties:
+            type: array
+            items:
+              $ref: '#/components/schemas/AnalyticsBreakdownEntry'
+      example:
+        code_id: cod_a1b2c3d4e5f6g7h8
+        from: "2026-08-01T00:00:00Z"
+        to: "2026-09-01T00:00:00Z"
+        total: 4210
+        series:
+          - bucket_start: "2026-08-01T00:00:00Z"
+            count: 132
+          - bucket_start: "2026-08-02T00:00:00Z"
+            count: 148
+        breakdowns:
+          device_category:
+            - value: mobile
+              count: 3012
+            - value: desktop
+              count: 1198
+          ua_family:
+            - value: Chrome
+              count: 2650
+            - value: Safari
+              count: 1560
+          referrer_host:
+            - value: instagram.com
+              count: 2001
+            - value: (direct)
+              count: 2209
+          is_bot:
+            - value: "false"
+              count: 4100
+            - value: "true"
+              count: 110
+
+    # -------------------- auth / users --------------------
+
+    UserSource:
+      type: string
+      enum: [local, forward_auth]
+
+    User:
+      type: object
+      additionalProperties: false
+      required: [id, email, is_admin, source, created_at]
+      properties:
+        id:
+          $ref: '#/components/schemas/UserId'
+        email:
+          type: string
+          format: email
+        is_admin:
+          type: boolean
+        source:
+          $ref: '#/components/schemas/UserSource'
+        created_at:
+          type: string
+          format: date-time
+        last_login_at:
+          type: [string, "null"]
+          format: date-time
+      example:
+        id: usr_z9y8x7w6v5u4t3s2
+        email: admin@example.com
+        is_admin: true
+        source: local
+        created_at: "2026-01-01T00:00:00Z"
+        last_login_at: "2026-09-04T08:00:00Z"
+
+    SignInRequest:
+      type: object
+      additionalProperties: false
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          format: password
+
+    # -------------------- tokens --------------------
+
+    ApiTokenSummary:
+      type: object
+      description: Token metadata only. The secret is never present here, or anywhere except the single `ApiTokenCreated` response at creation time.
+      additionalProperties: false
+      required: [id, name, created_at]
+      properties:
+        id:
+          $ref: '#/components/schemas/TokenId'
+        name:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        last_used_at:
+          type: [string, "null"]
+          format: date-time
+        revoked_at:
+          type: [string, "null"]
+          format: date-time
+        expires_at:
+          type: [string, "null"]
+          format: date-time
+      example:
+        id: tok_q1w2e3r4t5y6u7i8
+        name: ci-pipeline
+        created_at: "2026-06-01T00:00:00Z"
+        last_used_at: "2026-09-03T10:00:00Z"
+        revoked_at: null
+        expires_at: "2027-09-04T00:00:00Z"
+
+    CreateTokenRequest:
+      type: object
+      additionalProperties: false
+      required: [name]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: A human-readable label for this token.
+          example: ci-pipeline
+        expires_at:
+          type: [string, "null"]
+          format: date-time
+          description: Optional expiry. Omit or set null for a token that does not expire on its own.
+
+    ApiTokenCreated:
+      type: object
+      description: |
+        Returned exactly once, from `POST /v1/tokens` only. `secret` is shown here and
+        nowhere else, ever — not on any subsequent `GET`, not in the console, not in an
+        export. Copy it now; it cannot be retrieved again (FR-033, FR-034).
+      additionalProperties: false
+      required: [id, name, created_at, secret]
+      properties:
+        id:
+          $ref: '#/components/schemas/TokenId'
+        name:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        last_used_at:
+          type: [string, "null"]
+          format: date-time
+        revoked_at:
+          type: [string, "null"]
+          format: date-time
+        expires_at:
+          type: [string, "null"]
+          format: date-time
+        secret:
+          type: string
+          description: The bearer credential, shown this one time only. Format `qur_<base64url secret>`.
+          pattern: '^qur_[A-Za-z0-9_-]{43}$'
+          example: qur_Xk3mQvT8n2Lp9RzYh7WdEs4CjUo1BfAgN0iVtMxKcZs
+      example:
+        id: tok_q1w2e3r4t5y6u7i8
+        name: ci-pipeline
+        created_at: "2026-06-01T00:00:00Z"
+        last_used_at: null
+        revoked_at: null
+        expires_at: "2027-09-04T00:00:00Z"
+        secret: qur_Xk3mQvT8n2Lp9RzYh7WdEs4CjUo1BfAgN0iVtMxKcZs
+
+    # -------------------- export --------------------
+
+    ExportRecordKind:
+      type: string
+      enum: [code, styling_profile, scan_aggregate]
+
+    ExportRecord:
+      type: object
+      description: |
+        One line of the newline-delimited export stream. `data`'s shape depends on `kind`:
+        a `Code`-shaped object for `code`, a `StylingProfile`-shaped object for
+        `styling_profile`, or a scan-aggregate row (code reference, hour bucket, dimension,
+        value, count — mirroring `scan_rollups`) for `scan_aggregate`. Never includes instance
+        configuration or any scanner network address.
+      additionalProperties: false
+      required: [kind, data]
+      properties:
+        kind:
+          $ref: '#/components/schemas/ExportRecordKind'
+        data:
+          type: object
+          additionalProperties: true
+      example:
+        kind: code
+        data:
+          id: cod_a1b2c3d4e5f6g7h8
+          short_code: spring-sale
+          destination: "https://example.com/spring-sale"
+          state: active
+
+    # -------------------- operational --------------------
+
+    HealthStatus:
+      type: object
+      additionalProperties: false
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [ok, degraded]
+        checks:
+          type: object
+          description: Present on `/readyz`; keyed by backend name (e.g. `metadata_store`, `blob_store`).
+          additionalProperties:
+            type: string
+            enum: [ok, unhealthy]
+      example:
+        status: ok
+        checks:
+          metadata_store: ok
+          blob_store: ok
