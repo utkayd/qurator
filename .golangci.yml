@@ -1,0 +1,46 @@
+version: "2"
+run:
+  timeout: 5m
+linters:
+  enable:
+    - govet
+    - staticcheck
+    - errcheck
+    - gosec
+    - forbidigo
+    - depguard
+    - ineffassign
+    - unused
+  settings:
+    forbidigo:
+      forbid:
+        - pattern: ^fmt\.Print.*$
+          msg: "no fmt.Print* in the server; use log/slog (Constitution Principle VIII)"
+        - pattern: ^string\(.*[sS]ecret.*\)$
+          msg: "string(Secret) bypasses redaction; pass the Secret type through or use Reveal() at the single point of use"
+    depguard:
+      rules:
+        rejected-libraries:
+          deny:
+            - pkg: github.com/go-pkgz/auth
+              desc: "rejected in research.md: no Bearer support, no revocation"
+            - pkg: github.com/go-chi/chi
+              desc: "rejected in research.md: stdlib ServeMux exposes r.Pattern"
+            - pkg: github.com/yeqown/go-qrcode
+              desc: "rejected in research.md: its SVG writer does not exist"
+            - pkg: github.com/mattn/go-sqlite3
+              desc: "requires cgo; breaks the static binary (Principle I)"
+        qr-has-no-storage:
+          files:
+            - "**/internal/qr/**"
+          deny:
+            - pkg: github.com/utkayd/qurator/internal/store
+              desc: "Principle III: the ephemeral path must never touch storage"
+            - pkg: github.com/utkayd/qurator/internal/blob
+              desc: "Principle III: the ephemeral path must never touch storage"
+  exclusions:
+    rules:
+      - path: (^cmd/|^tools/)
+        linters: [forbidigo]
+      - path: _test\.go
+        linters: [gosec, forbidigo]

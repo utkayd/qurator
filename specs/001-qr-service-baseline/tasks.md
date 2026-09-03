@@ -42,7 +42,7 @@ this is rare.
 
 ## Path Conventions
 
-Single Go module at the repository root. Module path `github.com/utkay/qurator`. Layout
+Single Go module at the repository root. Module path `github.com/utkayd/qurator`. Layout
 per plan.md: `cmd/qurator/`, `internal/<package>/`, `tests/{arch,contract,integration,e2e}/`,
 `deploy/`, `.github/workflows/`.
 
@@ -54,7 +54,7 @@ per plan.md: `cmd/qurator/`, `internal/<package>/`, `tests/{arch,contract,integr
 
 **Purpose**: A compiling module with tooling, so every later task starts from green.
 
-- [ ] T001 (Stream 0) Initialise module `github.com/utkay/qurator` with `go mod init`, Go 1.26 directive, and create the directory skeleton from plan.md (`cmd/qurator`, every `internal/*` package dir with a `doc.go`, `tests/{arch,contract,integration,e2e}`, `deploy`, `.github/workflows`)
+- [ ] T001 (Stream 0) Initialise module `github.com/utkayd/qurator` with `go mod init`, Go 1.26 directive, and create the directory skeleton from plan.md (`cmd/qurator`, every `internal/*` package dir with a `doc.go`, `tests/{arch,contract,integration,e2e}`, `deploy`, `.github/workflows`)
 - [ ] T002 [P] (Stream 0) Add `Makefile` with targets `build` (`CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=$(VERSION)" -o bin/qurator ./cmd/qurator`), `test` (`go test -race ./...`), `lint`, `bench`, `fmt-check` (`test -z "$(gofmt -l .)"`)
 - [ ] T003 [P] (Stream 0) Add `.golangci.yml` enabling `govet`, `staticcheck`, `errcheck`, `gosec`, `forbidigo` (forbid `fmt.Print*` outside `cmd/` and `tools/`, per Principle VIII), and `depguard` denying `github.com/go-pkgz/auth`, `github.com/go-chi/chi`, `github.com/yeqown/go-qrcode`, `github.com/mattn/go-sqlite3` (the four rejected libraries in research.md)
 - [ ] T004 [P] (Stream 0) Add `.github/workflows/ci.yml` running `make build`, `go vet ./...`, `make fmt-check`, `golangci-lint`, and `go test -race ./...` on push and PR — with NO service containers (that is `contract-tests.yml`, Stream F), so this job is the Docker-free baseline every stream inherits
@@ -403,6 +403,6 @@ it a face.
 - 111 tasks: Stage 1 = 31, Stage 2 = 72 (A 22, B 16, C 11, D 10, E 7, F 9 — Stream A is
   the largest because the in-house shape renderer is real work no dependency provides),
   Stage 3 = 8
-- Module path `github.com/utkay/qurator` is an assumption — confirm before T001
+- Module path `github.com/utkayd/qurator` confirmed by the project owner
 - Any stream discovering that a frozen interface must change STOPS and reports; it does
   not fork the interface in its worktree
