@@ -21,7 +21,7 @@ func validConfig() Config {
 	c.Auth.DevMode = false
 	c.Codes.AllowedSchemes = []string{"http", "https"}
 	c.Render.MaxPx = 4096
-	c.Render.MaxDuration = 2_000_000_000  // 2s in ns
+	c.Render.MaxDuration = 2_000_000_000 // 2s in ns
 	c.Render.MaxPayloadBytes = 2953
 	c.Analytics.RetentionDays = 365
 	c.Log.Level = "info"

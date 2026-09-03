@@ -1,4 +1,3 @@
-// Package config loads and validates qurator's runtime configuration.
 package config
 
 import "log/slog"
