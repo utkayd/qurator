@@ -1,7 +1,19 @@
 <!--
 SYNC IMPACT REPORT
 ==================
-Version change: TEMPLATE (unversioned) → 1.0.0
+Version change: 1.0.0 → 1.0.1 (PATCH)
+Amendment (2026-09-04): Principle II's migration clause restated as "one ordered
+migration sequence", explicitly permitting per-dialect DDL branching inside a single
+numbered migration. PATCH because this clarifies what the principle protects rather than
+weakening it: the protected property is a single version ordering, which is preserved.
+Forced by a Phase 0 finding — goose does not translate SQL across dialects (its Dialect
+setting governs only its own bookkeeping table), proven by running a SQLite-flavoured
+AUTOINCREMENT migration against live PostgreSQL and observing SQLSTATE 42601. The
+original wording was therefore unsatisfiable for any realistic schema. See
+specs/001-qr-service-baseline/research.md section 3.
+
+--- Original ratification report ---
+Version change: TEMPLATE (unversioned) -> 1.0.0
 Rationale: Initial ratification. All placeholder tokens replaced with concrete,
 testable principles for the qurator project. MAJOR bump to 1.0.0 establishes the
 first governed baseline.
@@ -80,8 +92,13 @@ without touching code above it.
 - Backend-specific types, dialects, SQL strings, and error values MUST NOT appear in
   HTTP handlers or domain logic. Drivers MUST translate their errors into the
   package's own sentinel errors.
-- Schema migrations MUST be embedded, versioned, forward-only, and applied for both
-  SQL backends from the same migration set.
+- Schema migrations MUST be embedded, versioned, forward-only, and applied to both SQL
+  backends from **one ordered migration sequence**. A single version sequence is the
+  requirement, because it is what prevents the two backends from drifting apart. Where a
+  statement cannot be expressed portably — identity columns and case-insensitive unique
+  indexes are the known cases — a migration MAY branch its DDL per dialect internally,
+  provided both branches live in the same numbered migration and are applied under the
+  same version. Two independently numbered migration sets are prohibited.
 
 *Rationale:* The contract suite is what makes "pluggable" a fact rather than an
 aspiration, and it is what keeps a bug fixed in SQLite from silently persisting in
@@ -256,4 +273,4 @@ document wins.
   `CLAUDE.md` and `README.md`, which MUST NOT contradict this document. When they
   drift, this document is correct and they are the defect.
 
-**Version**: 1.0.0 | **Ratified**: 2026-09-04 | **Last Amended**: 2026-09-04
+**Version**: 1.0.1 | **Ratified**: 2026-09-04 | **Last Amended**: 2026-09-04
