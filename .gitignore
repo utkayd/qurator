@@ -1,0 +1,26 @@
+# Binaries
+/bin/
+/dist/
+qurator
+*.exe
+
+# Test & coverage
+*.out
+coverage.*
+
+# Local data
+*.db
+*.db-shm
+*.db-wal
+/data/
+
+# Env & secrets
+.env
+.env.*
+!.env.example
+
+# Agent folders (may hold credentials)
+.claude/settings.local.json
+
+# OS
+.DS_Store
