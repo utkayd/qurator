@@ -54,7 +54,7 @@ type Store interface {
     TouchTokenLastUsed(ctx context.Context, id string, at time.Time) error
 
     // Codes
-    CreateCode(ctx context.Context, c *domain.Code, s *domain.Styling) error
+    CreateCode(ctx context.Context, c *domain.Code) error // persists c.Styling and reserves the short code atomically
     GetCodeByShortCode(ctx context.Context, shortCode string) (*domain.Code, error)
     GetCodeByID(ctx context.Context, id, userID string) (*domain.Code, error)
     ListCodes(ctx context.Context, f domain.CodeFilter) ([]*domain.Code, string, error)
@@ -62,13 +62,12 @@ type Store interface {
     SetCodeState(ctx context.Context, id, userID string, state domain.CodeState) error
     DeleteCode(ctx context.Context, id, userID string) error
 
-    // Aliases
-    ReserveAlias(ctx context.Context, shortCode, codeID string) error
+    // Aliases (reservation happens inside CreateCode; there is no separate ReserveAlias)
     IsAliasAvailable(ctx context.Context, shortCode string) (bool, error)
     ReleaseAlias(ctx context.Context, shortCode string) error // admin only; ErrConflict if the owning code is not deleted
 
     // Analytics
-    InsertScanBatch(ctx context.Context, events []domain.ScanEvent) error
+    InsertScanBatch(ctx context.Context, b domain.ScanBatch) error // events + rollup deltas, one transaction
     QueryAnalytics(ctx context.Context, q domain.AnalyticsQuery) (*domain.AnalyticsResult, error)
     PruneScanEvents(ctx context.Context, before time.Time, limit int) (int64, error)
 
@@ -109,6 +108,29 @@ why it is pinned:
     populated database preserves data.
 12. **Pagination is stable** under concurrent inserts: a cursor does not skip or duplicate
     rows when new codes are created mid-listing.
+
+### Semantics pinned by the suite (driver authors: these are not optional)
+
+The reference in-memory implementation and the contract suite fix the following, so every
+driver must match them exactly:
+
+- `ListCodes` returns newest first (`created_at DESC, id DESC`), excludes `deleted` codes,
+  and filters `Destination` as a case-insensitive substring. `CreatedAfter`/`CreatedBefore`
+  boundary inclusivity is deliberately unpinned — tests never place a row on the boundary.
+- `GetCodeByID` and `GetCodeByShortCode` DO return `deleted` rows: the redirect path needs
+  to distinguish "deleted" from "never existed" to pick the landing response.
+- `CreateCode` stores `short_code` lowercased and sets `Version = 1` regardless of input.
+- `SetCodeState` on a `deleted` code returns `ErrConflict` — deleted is terminal.
+- `ReleaseAlias` is not idempotent: a second call returns `ErrNotFound` (operators running
+  it by hand learn whether it did anything). Live code → `ErrConflict`.
+- `IsAliasAvailable` covers store-level reservations only; the reserved-word list is
+  enforced by `internal/shortcode` before the store is consulted.
+- `QueryAnalytics` covers `[From, To)`, aligned to hour buckets (weeks start Monday UTC),
+  emits only non-empty series points, and always returns a non-nil `Breakdowns` map with
+  the four non-total dimensions present.
+- Timestamps round-trip at microsecond precision in `time.UTC`.
+- `storetest.BuildRollups(events)` is the canonical rollup computation; the analytics
+  stream must use it rather than reimplementing it, or breakdowns and totals can diverge.
 
 ### Harness shape
 
