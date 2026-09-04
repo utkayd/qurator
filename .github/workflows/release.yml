@@ -1,0 +1,94 @@
+name: release
+
+# Builds and publishes the multi-arch qurator image on a version tag, reproducibly
+# (research.md §6: -trimpath, empty -buildid, SOURCE_DATE_EPOCH-driven timestamps), then
+# smoke-tests it on each published platform as the nonroot user before anyone pulls it.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE: ghcr.io/utkayd/qurator
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Derive version and SOURCE_DATE_EPOCH from the tag commit
+        id: meta
+        run: |
+          echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          echo "source_date_epoch=$(git log -1 --format=%ct "$GITHUB_SHA")" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          build-args: |
+            VERSION=${{ steps.meta.outputs.version }}
+            SOURCE_DATE_EPOCH=${{ steps.meta.outputs.source_date_epoch }}
+          # --rewrite-timestamp normalises every layer's recorded mtime to
+          # SOURCE_DATE_EPOCH so the same source at the same commit produces the same
+          # image regardless of when the build ran (research.md §6).
+          outputs: type=image,name=${{ env.IMAGE }},push=true,rewrite-timestamp=true
+          tags: |
+            ${{ env.IMAGE }}:${{ steps.meta.outputs.version }}
+            ${{ env.IMAGE }}:latest
+
+  smoke-test:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        platform: [linux/amd64, linux/arm64]
+    steps:
+      - uses: docker/setup-qemu-action@v3
+
+      - name: Run as nonroot and curl /healthz from the host
+        run: |
+          docker run -d --name qurator-smoke --platform ${{ matrix.platform }} \
+            -p 18080:8080 "${{ env.IMAGE }}:${{ needs.build-and-push.outputs.version }}"
+
+          # distroless has no shell, so no curl/wget inside the container — the smoke
+          # check runs from the host against the published port instead.
+          for i in $(seq 1 30); do
+            if curl -fsS http://localhost:18080/healthz; then
+              echo "healthz ok on ${{ matrix.platform }}"
+              break
+            fi
+            if [ "$i" = "30" ]; then
+              echo "::error::healthz never came up on ${{ matrix.platform }}"
+              docker logs qurator-smoke
+              exit 1
+            fi
+            sleep 1
+          done
+
+          echo "container user:"
+          docker exec qurator-smoke id || true  # expected to fail: no `id` binary either
+
+          docker inspect qurator-smoke --format '{{.Config.User}}' | grep -qv '^0$' \
+            || (echo "::error::container is running as root"; exit 1)
+
+      - name: Cleanup
+        if: always()
+        run: docker rm -f qurator-smoke || true
