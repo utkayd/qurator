@@ -11,7 +11,6 @@ import (
 	"io"
 	"mime"
 	"net/http"
-	"regexp"
 	"strconv"
 	"strings"
 
@@ -21,10 +20,10 @@ import (
 	"github.com/utkayd/qurator/internal/qr"
 )
 
-// IdentityFunc reports whether the request carries an authenticated identity. The auth
+// AuthedFunc reports whether the request carries an authenticated identity. The auth
 // middleware (another package) puts identity in the request context; this indirection
 // keeps the QR handler free of any auth type.
-type IdentityFunc func(*http.Request) bool
+type AuthedFunc func(*http.Request) bool
 
 // maxBody bounds the POST body. The largest content payload is 2953 bytes; the rest
 // of the budget is a base64 logo (qr.MaxLogoBytes encoded, plus a third for base64).
@@ -41,14 +40,14 @@ const maxMultipartMemory = maxBody
 type QRHandler struct {
 	renderer *qr.Renderer
 	cfg      config.EphemeralConfig
-	isAuthed IdentityFunc
+	isAuthed AuthedFunc
 	serve    http.Handler
 }
 
 // NewQRHandler constructs the handler. When cfg.Public is false every request must be
 // authenticated (isAuthed). When it is true anonymous requests are accepted and the
 // whole handler is wrapped in limiter (FR-006).
-func NewQRHandler(renderer *qr.Renderer, cfg config.EphemeralConfig, isAuthed IdentityFunc, limiter func(http.Handler) http.Handler) *QRHandler {
+func NewQRHandler(renderer *qr.Renderer, cfg config.EphemeralConfig, isAuthed AuthedFunc, limiter func(http.Handler) http.Handler) *QRHandler {
 	h := &QRHandler{renderer: renderer, cfg: cfg, isAuthed: isAuthed}
 	var inner http.Handler = http.HandlerFunc(h.handle)
 	if cfg.Public && limiter != nil {
@@ -145,8 +144,6 @@ type fieldError struct {
 
 func (e *fieldError) Error() string { return e.field + ": " + e.msg }
 
-var hexColorRe = regexp.MustCompile(`^#[0-9A-Fa-f]{6}$`)
-
 // logoSpec mirrors OpenAPI LogoSpec. auto_raise is an extension: the contract says a
 // logo raises the effective level "automatically as needed" (FR-027); the flag lets a
 // caller who wants the requested level respected exactly opt out (default true).
@@ -156,9 +153,9 @@ type logoSpec struct {
 	AutoRaise   *bool    `json:"auto_raise"`
 }
 
-// stylingRequest mirrors OpenAPI StylingRequest. Pointers distinguish "absent" from a
+// qrStylingRequest mirrors OpenAPI StylingRequest. Pointers distinguish "absent" from a
 // zero value.
-type stylingRequest struct {
+type qrStylingRequest struct {
 	FgColor       *string   `json:"fg_color"`
 	BgColor       *string   `json:"bg_color"`
 	ModuleShape   *string   `json:"module_shape"`
@@ -173,9 +170,9 @@ const defaultLogoScale = 0.15
 
 // generateRequest mirrors OpenAPI GenerateQrRequest.
 type generateRequest struct {
-	Content string          `json:"content"`
-	Format  *string         `json:"format"`
-	Styling *stylingRequest `json:"styling"`
+	Content string            `json:"content"`
+	Format  *string           `json:"format"`
+	Styling *qrStylingRequest `json:"styling"`
 }
 
 func parseQuery(r *http.Request) (qr.Options, error) {
@@ -197,7 +194,7 @@ func parseQuery(r *http.Request) (qr.Options, error) {
 		}
 		return &n, nil
 	}
-	req := generateRequest{Content: q.Get("content"), Format: str("format"), Styling: &stylingRequest{
+	req := generateRequest{Content: q.Get("content"), Format: str("format"), Styling: &qrStylingRequest{
 		FgColor:     str("fg_color"),
 		BgColor:     str("bg_color"),
 		ModuleShape: str("module_shape"),
@@ -267,7 +264,7 @@ func parseMultipart(r *http.Request) (qr.Options, error) {
 		}
 		return &n, nil
 	}
-	req := generateRequest{Format: str("format"), Styling: &stylingRequest{
+	req := generateRequest{Format: str("format"), Styling: &qrStylingRequest{
 		FgColor:     str("fg_color"),
 		BgColor:     str("bg_color"),
 		ModuleShape: str("module_shape"),
@@ -367,7 +364,7 @@ func (g generateRequest) toOptions() (qr.Options, error) {
 	}
 	s := g.Styling
 	if s == nil {
-		s = &stylingRequest{}
+		s = &qrStylingRequest{}
 	}
 	if s.FgColor != nil {
 		if !hexColorRe.MatchString(*s.FgColor) {
