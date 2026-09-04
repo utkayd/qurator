@@ -708,14 +708,16 @@ paths:
         - $ref: '#/components/parameters/CodeIdPath'
         - name: from
           in: query
-          required: true
+          required: false
+          description: Start of the range (inclusive). Defaults to 30 days before `to`.
           schema:
             type: string
             format: date-time
           example: "2026-08-01T00:00:00Z"
         - name: to
           in: query
-          required: true
+          required: false
+          description: End of the range (exclusive). Defaults to now. Range may not exceed 366 days.
           schema:
             type: string
             format: date-time
@@ -1093,7 +1095,7 @@ components:
       in: cookie
       name: qurator_session
       description: |
-        An HttpOnly, `Secure`, `SameSite=Lax` session cookie set by `POST /v1/auth/signin`,
+        An HttpOnly, `Secure`, `SameSite=Strict` session cookie set by `POST /v1/auth/signin`,
         restricted to this instance's origin. State-changing operations authenticated this
         way MUST also carry the `X-Qurator-Requested-With` header (see the `CsrfHeader`
         parameter) as a same-origin assertion.
