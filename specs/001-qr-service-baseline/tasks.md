@@ -237,19 +237,19 @@ latency unchanged and drop counter rises (quickstart Scenario 5).
 
 ### Tests for User Story 4 (REQUIRED for contract surfaces — see Principle VII) ⚠️
 
-- [ ] T069 [P] [US4] (Stream D) Write `internal/analytics/recorder_test.go`: `Record` returns in <1µs when the buffer is full (benchmark-asserted) and increments the drop counter; a sink that blocks forever does not block `Record`; `Close(ctx)` with a 100ms deadline returns by the deadline with un-flushed count reported
-- [ ] T070 [P] [US4] (Stream D) Write `internal/analytics/rollup_test.go` against `storetest` memstore: after inserting a mixed batch, `total` equals the sum of every dimension's values for the same hour — the FR-023 invariant — and after `PruneScanEvents`, rollups are untouched
-- [ ] T071 [P] [US4] (Stream D) Write `internal/analytics/ua_test.go`: Googlebot/facebookexternalhit/Slackbot/curl → `bot`; iPhone Safari → `mobile`/`Safari`; referrer `https://a.example.com/path?token=secret` → `referrer_host` = `a.example.com` only
-- [ ] T072 [P] [US4] (Stream D) Write `tests/contract/analytics_test.go` against OpenAPI: time range filtering, `bucket=hour|day|week`, breakdown sums equal total, no `ip`/`country`/`geo` key anywhere in the response body (assert by walking the JSON)
+- [x] T069 [P] [US4] (Stream D) Write `internal/analytics/recorder_test.go`: `Record` returns in <1µs when the buffer is full (benchmark-asserted) and increments the drop counter; a sink that blocks forever does not block `Record`; `Close(ctx)` with a 100ms deadline returns by the deadline with un-flushed count reported
+- [x] T070 [P] [US4] (Stream D) Write `internal/analytics/rollup_test.go` against `storetest` memstore: after inserting a mixed batch, `total` equals the sum of every dimension's values for the same hour — the FR-023 invariant — and after `PruneScanEvents`, rollups are untouched
+- [x] T071 [P] [US4] (Stream D) Write `internal/analytics/ua_test.go`: Googlebot/facebookexternalhit/Slackbot/curl → `bot`; iPhone Safari → `mobile`/`Safari`; referrer `https://a.example.com/path?token=secret` → `referrer_host` = `a.example.com` only
+- [x] T072 [P] [US4] (Stream D) Write `tests/contract/analytics_test.go` against OpenAPI: time range filtering, `bucket=hour|day|week`, breakdown sums equal total, no `ip`/`country`/`geo` key anywhere in the response body (assert by walking the JSON)
 
 ### Implementation for User Story 4
 
-- [ ] T073 [US4] (Stream D) Create `internal/analytics/recorder.go` — buffered channel (10,000), `Record(ev)` via `select`/`default` drop path incrementing `qurator_scan_events_dropped_total`, N consumer goroutines batching at 200 or 500ms, `Close(ctx)` closing the channel and waiting on a `WaitGroup` under the ctx deadline; implements both `domain.Recorder` and the `analytics.Flusher` interface `main.go` calls
-- [ ] T074 [P] [US4] (Stream D) Create `internal/analytics/ua.go` wrapping `medama-io/go-useragent` → `ua_family`, `device_category` (`desktop/mobile/tablet/tv/bot`), `is_bot`; and `internal/analytics/referrer.go` reducing a referrer to host-only
-- [ ] T075 [US4] (Stream D) Create `internal/analytics/rollup.go` — build per-batch `(code, hour, dimension, value) → count` deltas and pass them with the raw batch so `Store.InsertScanBatch` upserts both in ONE transaction (`ON CONFLICT ... DO UPDATE SET count = count + ?`); note this requires the batch shape in `domain.ScanBatch` — if not present, Stream D adds it to `internal/analytics/batch.go` and the store call takes that type
-- [ ] T076 [P] [US4] (Stream D) Create `internal/analytics/retention.go` — daily ticker calling `PruneScanEvents(before, 1000)` in a loop until zero rows, with jitter, never touching rollups
-- [ ] T077 [US4] (Stream D) Implement `internal/httpapi/v1/analytics.go` per OpenAPI: query rollups (never raw events) for total, series by bucket, and breakdowns per dimension
-- [ ] T078 [US4] (Stream D) Add `internal/analytics/bench_test.go` — `BenchmarkRecord` (must be zero-alloc on the fast path); run T069–T072 green, `make lint`; commit on `stream/d-analytics`
+- [x] T073 [US4] (Stream D) Create `internal/analytics/recorder.go` — buffered channel (10,000), `Record(ev)` via `select`/`default` drop path incrementing `qurator_scan_events_dropped_total`, N consumer goroutines batching at 200 or 500ms, `Close(ctx)` closing the channel and waiting on a `WaitGroup` under the ctx deadline; implements both `domain.Recorder` and the `analytics.Flusher` interface `main.go` calls
+- [x] T074 [P] [US4] (Stream D) Create `internal/analytics/ua.go` wrapping `medama-io/go-useragent` → `ua_family`, `device_category` (`desktop/mobile/tablet/tv/bot`), `is_bot`; and `internal/analytics/referrer.go` reducing a referrer to host-only
+- [x] T075 [US4] (Stream D) Create `internal/analytics/rollup.go` — build per-batch `(code, hour, dimension, value) → count` deltas and pass them with the raw batch so `Store.InsertScanBatch` upserts both in ONE transaction (`ON CONFLICT ... DO UPDATE SET count = count + ?`); note this requires the batch shape in `domain.ScanBatch` — if not present, Stream D adds it to `internal/analytics/batch.go` and the store call takes that type
+- [x] T076 [P] [US4] (Stream D) Create `internal/analytics/retention.go` — daily ticker calling `PruneScanEvents(before, 1000)` in a loop until zero rows, with jitter, never touching rollups
+- [x] T077 [US4] (Stream D) Implement `internal/httpapi/v1/analytics.go` per OpenAPI: query rollups (never raw events) for total, series by bucket, and breakdowns per dimension
+- [x] T078 [US4] (Stream D) Add `internal/analytics/bench_test.go` — `BenchmarkRecord` (must be zero-alloc on the fast path); run T069–T072 green, `make lint`; commit on `stream/d-analytics`
 
 **Checkpoint**: Analytics on, redirects untouched.
 
