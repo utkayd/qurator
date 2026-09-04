@@ -266,3 +266,20 @@ func TestImage_ServesWithETagAndConditionalRequests(t *testing.T) {
 		}
 	}
 }
+
+func (c *countingStore) ForEachUser(ctx context.Context, fn func(*domain.User) error) error {
+	c.hit()
+	return c.inner.ForEachUser(ctx, fn)
+}
+func (c *countingStore) ForEachCode(ctx context.Context, fn func(*domain.Code) error) error {
+	c.hit()
+	return c.inner.ForEachCode(ctx, fn)
+}
+func (c *countingStore) ForEachRollup(ctx context.Context, fn func(domain.RollupDelta) error) error {
+	c.hit()
+	return c.inner.ForEachRollup(ctx, fn)
+}
+func (c *countingStore) ForEachReservation(ctx context.Context, fn func(domain.AliasReservation) error) error {
+	c.hit()
+	return c.inner.ForEachReservation(ctx, fn)
+}

@@ -29,6 +29,7 @@ type migration struct {
 // all is the ordered sequence. Append only; never renumber.
 var all = []migration{
 	{version: 1, up: up0001},
+	{version: 2, up: up0002},
 }
 
 // Apply runs every pending migration against db for the given dialect. It is idempotent.

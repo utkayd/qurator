@@ -43,7 +43,8 @@ type Store interface {
 	// Aliases
 	IsAliasAvailable(ctx context.Context, shortCode string) (bool, error)
 	// ReleaseAlias frees a reserved short code whose owning code is deleted; ErrConflict
-	// if the code is live, ErrNotFound if nothing is reserved.
+	// if the code is live, ErrNotFound if nothing is reserved. The reservation row is
+	// kept with ReleasedAt set, so the walkers above still see it.
 	ReleaseAlias(ctx context.Context, shortCode string) error
 
 	// Analytics. InsertScanBatch writes events and rollup deltas atomically.
@@ -52,6 +53,20 @@ type Store interface {
 	// PruneScanEvents deletes at most limit raw events older than before and reports how
 	// many were removed. Rollups are never touched.
 	PruneScanEvents(ctx context.Context, before time.Time, limit int) (int64, error)
+
+	// Bulk iteration. Each walker calls fn once per row, streaming (a driver must never
+	// materialise the whole table), and stops at the first error fn returns, which is
+	// propagated as-is. fn may call back into the store (export lists tokens per user
+	// from inside ForEachUser), so a driver must not hold an exclusive lock across fn.
+	// Order is unspecified. These exist so export (FR-055) and admin tooling can walk a
+	// whole instance through the base interface rather than an optional capability.
+	ForEachUser(ctx context.Context, fn func(*domain.User) error) error
+	// ForEachCode visits every code of every user, deleted rows included.
+	ForEachCode(ctx context.Context, fn func(*domain.Code) error) error
+	// ForEachRollup visits every stored (code, hour, dimension, value) aggregate.
+	ForEachRollup(ctx context.Context, fn func(domain.RollupDelta) error) error
+	// ForEachReservation visits every alias reservation, released ones included.
+	ForEachReservation(ctx context.Context, fn func(domain.AliasReservation) error) error
 
 	// Lifecycle
 	Migrate(ctx context.Context) error

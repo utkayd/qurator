@@ -308,9 +308,17 @@ func (s *Store) CreateCode(ctx context.Context, c *domain.Code) error {
 			utc(created), utc(updated)); err != nil {
 			return translate(err)
 		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO alias_reservations (short_code, code_id, reserved_at, released_at) VALUES ($1, $2, $3, NULL)`,
-			shortCode, c.ID, now()); err != nil {
+		// Re-arm a released reservation or create one; a still-unreleased row makes the
+		// upsert touch zero rows, which is the alias being taken (see the SQLite driver).
+		res, err := tx.ExecContext(ctx, `INSERT INTO alias_reservations (short_code, code_id, reserved_at, released_at) VALUES ($1, $2, $3, NULL)
+			ON CONFLICT (short_code) DO UPDATE SET code_id = EXCLUDED.code_id, reserved_at = EXCLUDED.reserved_at, released_at = NULL
+			WHERE alias_reservations.released_at IS NOT NULL`,
+			shortCode, c.ID, now())
+		if err != nil {
 			return translate(err)
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			return fmt.Errorf("postgres: short code %q reserved: %w", shortCode, store.ErrAliasTaken)
 		}
 		return nil
 	})
@@ -328,12 +336,10 @@ func (s *Store) CreateCode(ctx context.Context, c *domain.Code) error {
 }
 
 const codeCols = `c.id, c.short_code, c.is_alias, c.user_id, c.destination, c.state, c.blob_key, c.blob_etag, c.version, c.created_at, c.updated_at, c.deleted_at,
-	sp.id, sp.fg_color, sp.bg_color, sp.module_shape, sp.margin_modules, sp.size_px, sp.ec_level, sp.ec_level_effective, COALESCE(sp.logo_blob_key, ''), round(COALESCE(sp.logo_scale, 0)::numeric, 6)::float8`
+	sp.id, sp.fg_color, sp.bg_color, sp.module_shape, sp.margin_modules, sp.size_px, sp.ec_level, sp.ec_level_effective, COALESCE(sp.logo_blob_key, ''), COALESCE(sp.logo_scale, 0)`
 
-// codeFrom joins the styling profile. logo_scale is declared REAL by the shared
-// migration, which PostgreSQL stores as float4; rounding to six decimals on read
-// restores the caller's float64 (0.2, not 0.20000000298) — lossless for a fraction of
-// module area, and the only place the two dialects' numeric types leak.
+// codeFrom joins the styling profile. logo_scale is DOUBLE PRECISION since migration
+// 0002, so a float64 round-trips exactly on both dialects.
 const codeFrom = ` FROM codes c JOIN styling_profiles sp ON sp.id = c.styling_id `
 
 func scanCode(row interface{ Scan(...any) error }) (*domain.Code, error) {
@@ -361,8 +367,12 @@ func scanCode(row interface{ Scan(...any) error }) (*domain.Code, error) {
 	return &c, nil
 }
 
+// GetCodeByShortCode resolves the live code, or else the deleted code that still holds
+// the reservation (so the redirect path can serve the fallback); see the SQLite driver.
 func (s *Store) GetCodeByShortCode(ctx context.Context, shortCode string) (*domain.Code, error) {
-	return scanCode(s.db.QueryRowContext(ctx, `SELECT `+codeCols+codeFrom+`WHERE lower(c.short_code) = lower($1)`, shortCode))
+	return scanCode(s.db.QueryRowContext(ctx, `SELECT `+codeCols+codeFrom+`WHERE lower(c.short_code) = lower($1)
+		AND (c.state <> 'deleted' OR c.id = (SELECT code_id FROM alias_reservations WHERE short_code = lower($1) AND released_at IS NULL))
+		ORDER BY (c.state = 'deleted'), c.created_at DESC LIMIT 1`, shortCode))
 }
 
 func (s *Store) GetCodeByID(ctx context.Context, id, userID string) (*domain.Code, error) {
@@ -544,20 +554,21 @@ func (s *Store) DeleteCode(ctx context.Context, id, userID string) error {
 func (s *Store) IsAliasAvailable(ctx context.Context, shortCode string) (bool, error) {
 	var n int
 	err := s.db.QueryRowContext(ctx, `SELECT
-		(SELECT COUNT(*) FROM codes WHERE lower(short_code) = lower($1)) +
-		(SELECT COUNT(*) FROM alias_reservations WHERE short_code = lower($1))`, shortCode).Scan(&n)
+		(SELECT COUNT(*) FROM codes WHERE lower(short_code) = lower($1) AND state <> 'deleted') +
+		(SELECT COUNT(*) FROM alias_reservations WHERE short_code = lower($1) AND released_at IS NULL)`, shortCode).Scan(&n)
 	if err != nil {
 		return false, translate(err)
 	}
 	return n == 0, nil
 }
 
-// ReleaseAlias — see the SQLite driver for why the deleted row is renamed.
+// ReleaseAlias marks the reservation released; the row stays for history and export.
+// See the SQLite driver.
 func (s *Store) ReleaseAlias(ctx context.Context, shortCode string) error {
 	key := strings.ToLower(shortCode)
 	return s.withTx(ctx, func(tx *sql.Tx) error {
 		var one int
-		if err := tx.QueryRowContext(ctx, `SELECT 1 FROM alias_reservations WHERE short_code = $1 FOR UPDATE`, key).Scan(&one); err != nil {
+		if err := tx.QueryRowContext(ctx, `SELECT 1 FROM alias_reservations WHERE short_code = $1 AND released_at IS NULL FOR UPDATE`, key).Scan(&one); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				return notFound("alias " + key + " not reserved")
 			}
@@ -570,11 +581,7 @@ func (s *Store) ReleaseAlias(ctx context.Context, shortCode string) error {
 		if live > 0 {
 			return conflict("alias " + key + " owned by live code")
 		}
-		if _, err := tx.ExecContext(ctx, `UPDATE codes SET short_code = 'released:' || short_code || ':' || id
-			WHERE lower(short_code) = lower($1) AND state = 'deleted'`, key); err != nil {
-			return translate(err)
-		}
-		if _, err := tx.ExecContext(ctx, `DELETE FROM alias_reservations WHERE short_code = $1`, key); err != nil {
+		if _, err := tx.ExecContext(ctx, `UPDATE alias_reservations SET released_at = $1 WHERE short_code = $2 AND released_at IS NULL`, now(), key); err != nil {
 			return translate(err)
 		}
 		return nil
@@ -739,6 +746,96 @@ func (s *Store) PruneScanEvents(ctx context.Context, before time.Time, limit int
 	}
 	n, err := res.RowsAffected()
 	return n, translate(err)
+}
+
+// ---- bulk iteration ------------------------------------------------------------------
+//
+// Each walker streams a rows cursor and hands rows to fn as they are scanned; fn may
+// call back into the store on another pooled connection, and its first error ends the
+// walk and is returned unwrapped.
+
+func (s *Store) ForEachUser(ctx context.Context, fn func(*domain.User) error) error {
+	rows, err := s.db.QueryContext(ctx, `SELECT `+userCols+` FROM users ORDER BY created_at, id`)
+	if err != nil {
+		return translate(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		u, err := scanUser(rows)
+		if err != nil {
+			return err
+		}
+		if err := fn(u); err != nil {
+			return err
+		}
+	}
+	return translate(rows.Err())
+}
+
+func (s *Store) ForEachCode(ctx context.Context, fn func(*domain.Code) error) error {
+	rows, err := s.db.QueryContext(ctx, `SELECT `+codeCols+codeFrom+`ORDER BY c.created_at, c.id`)
+	if err != nil {
+		return translate(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		c, err := scanCode(rows)
+		if err != nil {
+			return err
+		}
+		if err := fn(c); err != nil {
+			return err
+		}
+	}
+	return translate(rows.Err())
+}
+
+func (s *Store) ForEachRollup(ctx context.Context, fn func(domain.RollupDelta) error) error {
+	rows, err := s.db.QueryContext(ctx, `SELECT code_id, hour_bucket, dimension, value, count FROM scan_rollups ORDER BY code_id, hour_bucket, dimension, value`)
+	if err != nil {
+		return translate(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var (
+			r    domain.RollupDelta
+			hour time.Time
+			dim  string
+		)
+		if err := rows.Scan(&r.CodeID, &hour, &dim, &r.Value, &r.Count); err != nil {
+			return translate(err)
+		}
+		r.HourBucket = hour.UTC()
+		r.Dimension = domain.Dimension(dim)
+		if err := fn(r); err != nil {
+			return err
+		}
+	}
+	return translate(rows.Err())
+}
+
+func (s *Store) ForEachReservation(ctx context.Context, fn func(domain.AliasReservation) error) error {
+	rows, err := s.db.QueryContext(ctx, `SELECT short_code, COALESCE(code_id, ''), reserved_at, released_at FROM alias_reservations ORDER BY short_code`)
+	if err != nil {
+		return translate(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var (
+			r        domain.AliasReservation
+			reserved time.Time
+			released sql.NullTime
+		)
+		if err := rows.Scan(&r.ShortCode, &r.CodeID, &reserved, &released); err != nil {
+			return translate(err)
+		}
+		r.ReservedAt = reserved.UTC()
+		r.ReleasedAt = fromNull(released)
+		if err := fn(r); err != nil {
+			return err
+		}
+	}
+	return translate(rows.Err())
 }
 
 // ---- lifecycle -----------------------------------------------------------------------

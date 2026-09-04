@@ -18,7 +18,8 @@ import (
 // unmodified (Constitution Principle II). newStore must return a fresh, empty, migrated
 // store on every call; the suite never shares state between subtests.
 //
-// The twelve numbered requirements come from contracts/store.md §Store. The remaining
+// The first twelve numbered requirements come from contracts/store.md §Store; Req13 pins
+// the bulk-iteration walkers export depends on (FR-055). The remaining
 // subtests pin behaviours of the frozen interface that the numbered list leaves implicit
 // (users, tokens, alias availability, listing filters).
 func RunStoreContract(t *testing.T, newStore func(t *testing.T) store.Store) {
@@ -604,6 +605,150 @@ func RunStoreContract(t *testing.T, newStore func(t *testing.T) store.Store) {
 		items, _, err = s.ListCodes(ctx(t), domain.CodeFilter{UserID: u.ID, Limit: 100})
 		if err != nil || len(items) != 6 {
 			t.Fatalf("listing after delete: %d items err=%v, want 6", len(items), err)
+		}
+	})
+
+	t.Run("Req13_ForEachStreamsEverything", func(t *testing.T) {
+		s := newStore(t)
+		ua := mustUser(t, s, "a@example.com")
+		ub := mustUser(t, s, "b@example.com")
+		live := mustCode(t, s, ua.ID, "live-one", true)
+		gone := mustCode(t, s, ub.ID, "gone-one", false)
+		freed := mustCode(t, s, ua.ID, "freed-one", true)
+		if err := s.DeleteCode(ctx(t), gone.ID, ub.ID); err != nil {
+			t.Fatalf("DeleteCode(gone): %v", err)
+		}
+		if err := s.DeleteCode(ctx(t), freed.ID, ua.ID); err != nil {
+			t.Fatalf("DeleteCode(freed): %v", err)
+		}
+		if err := s.ReleaseAlias(ctx(t), "freed-one"); err != nil {
+			t.Fatalf("ReleaseAlias(freed): %v", err)
+		}
+		hour := time.Now().UTC().Truncate(time.Hour)
+		if err := s.InsertScanBatch(ctx(t), domain.ScanBatch{Rollups: []domain.RollupDelta{
+			{CodeID: live.ID, HourBucket: hour, Dimension: domain.DimTotal, Value: "", Count: 2},
+			{CodeID: live.ID, HourBucket: hour.Add(30 * time.Minute), Dimension: domain.DimTotal, Value: "", Count: 3}, // same hour: merged
+			{CodeID: gone.ID, HourBucket: hour, Dimension: domain.DimIsBot, Value: "true", Count: 1},
+		}}); err != nil {
+			t.Fatalf("InsertScanBatch: %v", err)
+		}
+
+		// Users: every row once, and fn may call back into the store mid-walk.
+		users := map[string]string{}
+		if err := s.ForEachUser(ctx(t), func(u *domain.User) error {
+			if _, dup := users[u.ID]; dup {
+				t.Fatalf("ForEachUser visited %q twice", u.ID)
+			}
+			users[u.ID] = u.Email
+			if _, err := s.GetUserByID(ctx(t), u.ID); err != nil {
+				return err
+			}
+			return nil
+		}); err != nil {
+			t.Fatalf("ForEachUser: %v", err)
+		}
+		if len(users) != 2 || users[ua.ID] != "a@example.com" || users[ub.ID] != "b@example.com" {
+			t.Fatalf("ForEachUser visited %v, want both users", users)
+		}
+
+		// Codes: all users, deleted rows included, with styling inlined.
+		codes := map[string]*domain.Code{}
+		if err := s.ForEachCode(ctx(t), func(c *domain.Code) error {
+			if _, dup := codes[c.ID]; dup {
+				t.Fatalf("ForEachCode visited %q twice", c.ID)
+			}
+			codes[c.ID] = c
+			return nil
+		}); err != nil {
+			t.Fatalf("ForEachCode: %v", err)
+		}
+		if len(codes) != 3 {
+			t.Fatalf("ForEachCode visited %d codes, want 3 (deleted included)", len(codes))
+		}
+		if c := codes[gone.ID]; c == nil || c.State != domain.CodeDeleted || c.DeletedAt == nil || c.UserID != ub.ID {
+			t.Fatalf("ForEachCode(gone) = %+v, want the deleted row", c)
+		}
+		if c := codes[live.ID]; c == nil || c.Styling.ID != live.Styling.ID || c.ShortCode != "live-one" {
+			t.Fatalf("ForEachCode(live) = %+v, want styling inlined and short code intact", c)
+		}
+
+		// Rollups: one aggregate row per (code, hour, dimension, value).
+		type rk struct {
+			code  string
+			hour  time.Time
+			dim   domain.Dimension
+			value string
+		}
+		rollups := map[rk]int64{}
+		if err := s.ForEachRollup(ctx(t), func(r domain.RollupDelta) error {
+			k := rk{r.CodeID, r.HourBucket.UTC(), r.Dimension, r.Value}
+			if _, dup := rollups[k]; dup {
+				t.Fatalf("ForEachRollup visited %+v twice", k)
+			}
+			rollups[k] = r.Count
+			return nil
+		}); err != nil {
+			t.Fatalf("ForEachRollup: %v", err)
+		}
+		if len(rollups) != 2 {
+			t.Fatalf("ForEachRollup visited %d rows, want 2: %v", len(rollups), rollups)
+		}
+		if n := rollups[rk{live.ID, hour, domain.DimTotal, ""}]; n != 5 {
+			t.Fatalf("ForEachRollup(live total) = %d, want 5 (two deltas merged)", n)
+		}
+		if n := rollups[rk{gone.ID, hour, domain.DimIsBot, "true"}]; n != 1 {
+			t.Fatalf("ForEachRollup(gone is_bot) = %d, want 1", n)
+		}
+
+		// Reservations: one per short code ever registered, released ones included and
+		// still pointing at the code that made them.
+		res := map[string]domain.AliasReservation{}
+		if err := s.ForEachReservation(ctx(t), func(r domain.AliasReservation) error {
+			if _, dup := res[r.ShortCode]; dup {
+				t.Fatalf("ForEachReservation visited %q twice", r.ShortCode)
+			}
+			res[r.ShortCode] = r
+			return nil
+		}); err != nil {
+			t.Fatalf("ForEachReservation: %v", err)
+		}
+		if len(res) != 3 {
+			t.Fatalf("ForEachReservation visited %d rows, want 3: %v", len(res), res)
+		}
+		for sc, want := range map[string]*domain.Code{"live-one": live, "gone-one": gone} {
+			r, ok := res[sc]
+			if !ok || r.CodeID != want.ID || r.ReleasedAt != nil || r.ReservedAt.IsZero() {
+				t.Fatalf("ForEachReservation(%s) = %+v, want unreleased, code %q", sc, r, want.ID)
+			}
+		}
+		if r := res["freed-one"]; r.CodeID != freed.ID || r.ReleasedAt == nil {
+			t.Fatalf("ForEachReservation(freed-one) = %+v, want released, code %q", r, freed.ID)
+		}
+
+		// fn's error aborts the walk early and comes back unwrapped.
+		sentinel := errors.New("stop here")
+		calls := 0
+		err := s.ForEachCode(ctx(t), func(*domain.Code) error {
+			calls++
+			return sentinel
+		})
+		if !errors.Is(err, sentinel) {
+			t.Fatalf("ForEachCode with failing fn: got %v, want the sentinel", err)
+		}
+		if calls != 1 {
+			t.Fatalf("ForEachCode kept walking after fn failed: %d calls, want 1", calls)
+		}
+		calls = 0
+		if err := s.ForEachUser(ctx(t), func(*domain.User) error { calls++; return sentinel }); !errors.Is(err, sentinel) || calls != 1 {
+			t.Fatalf("ForEachUser with failing fn: err=%v calls=%d, want sentinel after 1 call", err, calls)
+		}
+		calls = 0
+		if err := s.ForEachRollup(ctx(t), func(domain.RollupDelta) error { calls++; return sentinel }); !errors.Is(err, sentinel) || calls != 1 {
+			t.Fatalf("ForEachRollup with failing fn: err=%v calls=%d, want sentinel after 1 call", err, calls)
+		}
+		calls = 0
+		if err := s.ForEachReservation(ctx(t), func(domain.AliasReservation) error { calls++; return sentinel }); !errors.Is(err, sentinel) || calls != 1 {
+			t.Fatalf("ForEachReservation with failing fn: err=%v calls=%d, want sentinel after 1 call", err, calls)
 		}
 	})
 

@@ -212,3 +212,15 @@ type NopRecorder struct{}
 
 // Record implements Recorder.
 func (NopRecorder) Record(ScanEvent) {}
+
+// AliasReservation is one row of the short-code namespace ledger (data-model.md
+// alias_reservations). A reservation is created with its code and outlives the code's
+// soft delete (FR-018); ReleasedAt is set — never the row removed — when an admin
+// releases it, so the namespace history survives for export and audit. The short code
+// is taken exactly when a row for it exists with ReleasedAt == nil.
+type AliasReservation struct {
+	ShortCode  string
+	CodeID     string
+	ReservedAt time.Time
+	ReleasedAt *time.Time
+}

@@ -59,13 +59,11 @@ func (s *spooledEntity) close() error {
 }
 
 // Write streams a full export of st to w as a tar archive: manifest.json plus one
-// <entity>.jsonl file per entity actually available (see the package doc for when an
-// entity is omitted).
+// <entity>.jsonl file per entity (see the package doc for what each carries).
 func Write(ctx context.Context, st store.Store, w io.Writer) error {
 	manifest := Manifest{
 		Version:  FormatVersion,
 		Entities: map[string]int64{},
-		Omitted:  map[string]string{},
 	}
 
 	var spools []*spooledEntity
@@ -74,16 +72,6 @@ func Write(ctx context.Context, st store.Store, w io.Writer) error {
 			s.close()
 		}
 	}()
-
-	ex, ok := st.(Exporter)
-	if !ok {
-		manifest.Omitted["users"] = "store does not implement export.Exporter: no way to enumerate users"
-		manifest.Omitted["api_tokens"] = "requires users to enumerate per-user tokens"
-		manifest.Omitted["codes"] = "store.ListCodes requires a UserID filter and no user IDs could be discovered"
-		manifest.Omitted["alias_reservations"] = "store does not implement export.Exporter"
-		manifest.Omitted["scan_rollups"] = "store does not implement export.Exporter"
-		return writeManifestOnly(w, manifest)
-	}
 
 	usersSp, err := newSpool(fileUsers)
 	if err != nil {
@@ -95,13 +83,8 @@ func Write(ctx context.Context, st store.Store, w io.Writer) error {
 		return err
 	}
 	spools = append(spools, tokensSp)
-	codesSp, err := newSpool(fileCodes)
-	if err != nil {
-		return err
-	}
-	spools = append(spools, codesSp)
 
-	if err := ex.ExportUsers(ctx, func(u *domain.User) error {
+	if err := st.ForEachUser(ctx, func(u *domain.User) error {
 		rec := userRecord{
 			ID: u.ID, Email: u.Email, IsAdmin: u.IsAdmin, TokenVersion: u.TokenVersion,
 			Source: string(u.Source), CreatedAt: u.CreatedAt, LastLoginAt: u.LastLoginAt,
@@ -122,29 +105,23 @@ func Write(ctx context.Context, st store.Store, w io.Writer) error {
 				return err
 			}
 		}
-
-		cursor := ""
-		for {
-			codes, next, err := st.ListCodes(ctx, domain.CodeFilter{UserID: u.ID, Limit: 500, Cursor: cursor})
-			if err != nil {
-				return fmt.Errorf("export: list codes for user %q: %w", u.ID, err)
-			}
-			for _, c := range codes {
-				if err := codesSp.put(c); err != nil {
-					return err
-				}
-			}
-			if next == "" {
-				break
-			}
-			cursor = next
-		}
 		return nil
 	}); err != nil {
 		return fmt.Errorf("export: users: %w", err)
 	}
 	manifest.Entities["users"] = usersSp.n
 	manifest.Entities["api_tokens"] = tokensSp.n
+
+	codesSp, err := newSpool(fileCodes)
+	if err != nil {
+		return err
+	}
+	spools = append(spools, codesSp)
+	if err := st.ForEachCode(ctx, func(c *domain.Code) error {
+		return codesSp.put(c)
+	}); err != nil {
+		return fmt.Errorf("export: codes: %w", err)
+	}
 	manifest.Entities["codes"] = codesSp.n
 
 	resSp, err := newSpool(fileReservations)
@@ -152,8 +129,10 @@ func Write(ctx context.Context, st store.Store, w io.Writer) error {
 		return err
 	}
 	spools = append(spools, resSp)
-	if err := ex.ExportReservations(ctx, func(r ReservationRecord) error {
-		return resSp.put(r)
+	if err := st.ForEachReservation(ctx, func(r domain.AliasReservation) error {
+		return resSp.put(reservationRecord{
+			ShortCode: r.ShortCode, CodeID: r.CodeID, ReservedAt: r.ReservedAt, ReleasedAt: r.ReleasedAt,
+		})
 	}); err != nil {
 		return fmt.Errorf("export: alias reservations: %w", err)
 	}
@@ -164,7 +143,7 @@ func Write(ctx context.Context, st store.Store, w io.Writer) error {
 		return err
 	}
 	spools = append(spools, rollupsSp)
-	if err := ex.ExportRollups(ctx, func(r domain.RollupDelta) error {
+	if err := st.ForEachRollup(ctx, func(r domain.RollupDelta) error {
 		return rollupsSp.put(r)
 	}); err != nil {
 		return fmt.Errorf("export: scan rollups: %w", err)
@@ -181,15 +160,6 @@ func Write(ctx context.Context, st store.Store, w io.Writer) error {
 		if err := spoolToTar(tw, s); err != nil {
 			return err
 		}
-	}
-	return tw.Close()
-}
-
-func writeManifestOnly(w io.Writer, m Manifest) error {
-	m.ExportedAt = time.Now().UTC()
-	tw := tar.NewWriter(w)
-	if err := writeManifestEntry(tw, m); err != nil {
-		return err
 	}
 	return tw.Close()
 }

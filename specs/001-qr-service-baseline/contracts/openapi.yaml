@@ -301,8 +301,6 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '413':
           $ref: '#/components/responses/ContentTooLarge'
-        '400':
-          $ref: '#/components/responses/UnprocessableStyling'
         '429':
           $ref: '#/components/responses/RateLimited'
         '5XX':
@@ -350,8 +348,6 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '413':
           $ref: '#/components/responses/ContentTooLarge'
-        '400':
-          $ref: '#/components/responses/UnprocessableStyling'
         '429':
           $ref: '#/components/responses/RateLimited'
         '5XX':
@@ -472,8 +468,6 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '409':
           $ref: '#/components/responses/Conflict'
-        '400':
-          $ref: '#/components/responses/UnprocessableStyling'
         '5XX':
           description: Unexpected server error.
           content:
@@ -1143,7 +1137,7 @@ components:
             type: string
 
     BadRequest:
-      description: The request is malformed or fails basic validation.
+      description: The request is malformed or fails basic validation. Styling rejections use the same shape with codes contrast_too_low, logo_too_large, dimensions_exceeded, or render_timeout (see UnprocessableStyling for their details).
       content:
         application/json:
           schema:

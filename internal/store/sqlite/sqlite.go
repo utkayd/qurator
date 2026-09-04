@@ -351,9 +351,11 @@ func (s *Store) TouchTokenLastUsed(ctx context.Context, id string, at time.Time)
 // ---- codes ---------------------------------------------------------------------------
 
 // CreateCode inserts the styling profile, the code, and its alias reservation in one
-// transaction. The case-insensitive unique index on codes.short_code and the primary
-// key on alias_reservations.short_code (which survives DeleteCode, FR-018) both surface
-// as ErrAliasTaken.
+// transaction. Two things guard the namespace, both surfacing as ErrAliasTaken: the
+// partial case-insensitive unique index on live codes (migration 0002), and the
+// alias_reservations row, which survives DeleteCode (FR-018) and is only ever marked
+// released, never removed. Re-registering a released short code re-arms that row via the
+// upsert below; an upsert that touches zero rows means the row is still unreleased.
 func (s *Store) CreateCode(ctx context.Context, c *domain.Code) error {
 	if c.ID == "" || c.ShortCode == "" || c.UserID == "" {
 		return errors.New("sqlite: code id, short code and user id are required")
@@ -388,9 +390,15 @@ func (s *Store) CreateCode(ctx context.Context, c *domain.Code) error {
 			fmtTime(created), fmtTime(updated)); err != nil {
 			return translate(err)
 		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO alias_reservations (short_code, code_id, reserved_at, released_at) VALUES (?, ?, ?, NULL)`,
-			shortCode, c.ID, fmtTime(now())); err != nil {
+		res, err := tx.ExecContext(ctx, `INSERT INTO alias_reservations (short_code, code_id, reserved_at, released_at) VALUES (?, ?, ?, NULL)
+			ON CONFLICT (short_code) DO UPDATE SET code_id = excluded.code_id, reserved_at = excluded.reserved_at, released_at = NULL
+			WHERE alias_reservations.released_at IS NOT NULL`,
+			shortCode, c.ID, fmtTime(now()))
+		if err != nil {
 			return translate(err)
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			return fmt.Errorf("sqlite: short code %q reserved: %w", shortCode, store.ErrAliasTaken)
 		}
 		return nil
 	})
@@ -451,8 +459,14 @@ func scanCode(row interface{ Scan(...any) error }) (*domain.Code, error) {
 	return &c, nil
 }
 
+// GetCodeByShortCode resolves the live code for a short code, or — so the redirect path
+// can serve the fallback — the deleted code that still holds its reservation. A deleted
+// row whose alias has been released (or re-registered by another code) no longer
+// resolves, which is also why deleted rows may share a short code with a live one.
 func (s *Store) GetCodeByShortCode(ctx context.Context, shortCode string) (*domain.Code, error) {
-	return scanCode(s.r.QueryRowContext(ctx, `SELECT `+codeCols+codeFrom+`WHERE c.short_code = ? COLLATE NOCASE`, shortCode))
+	return scanCode(s.r.QueryRowContext(ctx, `SELECT `+codeCols+codeFrom+`WHERE c.short_code = ? COLLATE NOCASE
+		AND (c.state != 'deleted' OR c.id = (SELECT code_id FROM alias_reservations WHERE short_code = lower(?) AND released_at IS NULL))
+		ORDER BY (c.state = 'deleted'), c.created_at DESC LIMIT 1`, shortCode, shortCode))
 }
 
 func (s *Store) GetCodeByID(ctx context.Context, id, userID string) (*domain.Code, error) {
@@ -638,23 +652,23 @@ func (s *Store) DeleteCode(ctx context.Context, id, userID string) error {
 func (s *Store) IsAliasAvailable(ctx context.Context, shortCode string) (bool, error) {
 	var n int
 	err := s.r.QueryRowContext(ctx, `SELECT
-		(SELECT COUNT(*) FROM codes WHERE short_code = ? COLLATE NOCASE) +
-		(SELECT COUNT(*) FROM alias_reservations WHERE short_code = lower(?))`, shortCode, shortCode).Scan(&n)
+		(SELECT COUNT(*) FROM codes WHERE short_code = ? COLLATE NOCASE AND state != 'deleted') +
+		(SELECT COUNT(*) FROM alias_reservations WHERE short_code = lower(?) AND released_at IS NULL)`, shortCode, shortCode).Scan(&n)
 	if err != nil {
 		return false, translate(err)
 	}
 	return n == 0, nil
 }
 
-// ReleaseAlias removes the reservation and renames the deleted row's short_code to a
-// value outside the alias charset (`released:<code>:<id>`), because the unique index on
-// codes.short_code is not partial: without the rename the deleted row itself would keep
-// blocking re-registration. Not idempotent by contract: a second call is ErrNotFound.
+// ReleaseAlias marks the reservation released (released_at set; the row and the deleted
+// code's short_code are left intact for history and export). The partial unique index
+// ignores deleted rows, so nothing else blocks re-registration. Not idempotent by
+// contract: a second call finds no unreleased reservation and is ErrNotFound.
 func (s *Store) ReleaseAlias(ctx context.Context, shortCode string) error {
 	key := strings.ToLower(shortCode)
 	return s.withTx(ctx, func(tx *sql.Tx) error {
 		var one int
-		if err := tx.QueryRowContext(ctx, `SELECT 1 FROM alias_reservations WHERE short_code = ?`, key).Scan(&one); err != nil {
+		if err := tx.QueryRowContext(ctx, `SELECT 1 FROM alias_reservations WHERE short_code = ? AND released_at IS NULL`, key).Scan(&one); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				return notFound("alias " + key + " not reserved")
 			}
@@ -667,11 +681,7 @@ func (s *Store) ReleaseAlias(ctx context.Context, shortCode string) error {
 		if live > 0 {
 			return conflict("alias " + key + " owned by live code")
 		}
-		if _, err := tx.ExecContext(ctx, `UPDATE codes SET short_code = 'released:' || short_code || ':' || id
-			WHERE short_code = ? COLLATE NOCASE AND state = 'deleted'`, key); err != nil {
-			return translate(err)
-		}
-		if _, err := tx.ExecContext(ctx, `DELETE FROM alias_reservations WHERE short_code = ?`, key); err != nil {
+		if _, err := tx.ExecContext(ctx, `UPDATE alias_reservations SET released_at = ? WHERE short_code = ? AND released_at IS NULL`, fmtTime(now()), key); err != nil {
 			return translate(err)
 		}
 		return nil
@@ -844,6 +854,103 @@ func (s *Store) PruneScanEvents(ctx context.Context, before time.Time, limit int
 	}
 	n, err := res.RowsAffected()
 	return n, translate(err)
+}
+
+// ---- bulk iteration ------------------------------------------------------------------
+//
+// Every walker streams through a rows cursor on the reader pool and hands each row to fn
+// as it is scanned; nothing is buffered. fn may call back into the store (the reader pool
+// has spare connections and WAL never blocks a reader), and its first error ends the walk
+// and is returned unwrapped.
+
+func (s *Store) ForEachUser(ctx context.Context, fn func(*domain.User) error) error {
+	rows, err := s.r.QueryContext(ctx, `SELECT `+userCols+` FROM users ORDER BY created_at, id`)
+	if err != nil {
+		return translate(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		u, err := scanUser(rows)
+		if err != nil {
+			return err
+		}
+		if err := fn(u); err != nil {
+			return err
+		}
+	}
+	return translate(rows.Err())
+}
+
+func (s *Store) ForEachCode(ctx context.Context, fn func(*domain.Code) error) error {
+	rows, err := s.r.QueryContext(ctx, `SELECT `+codeCols+codeFrom+`ORDER BY c.created_at, c.id`)
+	if err != nil {
+		return translate(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		c, err := scanCode(rows)
+		if err != nil {
+			return err
+		}
+		if err := fn(c); err != nil {
+			return err
+		}
+	}
+	return translate(rows.Err())
+}
+
+func (s *Store) ForEachRollup(ctx context.Context, fn func(domain.RollupDelta) error) error {
+	rows, err := s.r.QueryContext(ctx, `SELECT code_id, hour_bucket, dimension, value, count FROM scan_rollups ORDER BY code_id, hour_bucket, dimension, value`)
+	if err != nil {
+		return translate(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var (
+			r     domain.RollupDelta
+			hourS string
+			dim   string
+		)
+		if err := rows.Scan(&r.CodeID, &hourS, &dim, &r.Value, &r.Count); err != nil {
+			return translate(err)
+		}
+		if r.HourBucket, err = parseTime(hourS); err != nil {
+			return err
+		}
+		r.Dimension = domain.Dimension(dim)
+		if err := fn(r); err != nil {
+			return err
+		}
+	}
+	return translate(rows.Err())
+}
+
+func (s *Store) ForEachReservation(ctx context.Context, fn func(domain.AliasReservation) error) error {
+	rows, err := s.r.QueryContext(ctx, `SELECT short_code, COALESCE(code_id, ''), reserved_at, released_at FROM alias_reservations ORDER BY short_code`)
+	if err != nil {
+		return translate(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var (
+			r         domain.AliasReservation
+			reservedS string
+			released  sql.NullString
+		)
+		if err := rows.Scan(&r.ShortCode, &r.CodeID, &reservedS, &released); err != nil {
+			return translate(err)
+		}
+		if r.ReservedAt, err = parseTime(reservedS); err != nil {
+			return err
+		}
+		if r.ReleasedAt, err = parseTimePtr(released); err != nil {
+			return err
+		}
+		if err := fn(r); err != nil {
+			return err
+		}
+	}
+	return translate(rows.Err())
 }
 
 // ---- lifecycle -----------------------------------------------------------------------

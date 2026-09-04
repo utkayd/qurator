@@ -3,35 +3,30 @@
 // flush, and both must happen under the two-budget order documented in research.md §6
 // (drain the HTTP server first, THEN flush analytics, on separate deadlines).
 //
-// # Why this test does not exec the real binary
+// # Two variants
 //
-// T096 asks for exactly that: build ./cmd/qurator, start it, send it SIGTERM under
-// load. As of this stream (stream/f-ops, off foundation-frozen), cmd/qurator has no
-// store driver registered — those land with the Stage 2 store/analytics streams — so
-// `qurator` with QURATOR_AUTH_DEV_MODE=true still cannot start: config.Load succeeds,
-// but store.Open immediately fails with "unknown driver" (internal/store/open.go) since
-// nothing has called store.Register yet. A real-binary shutdown test would therefore
-// never get far enough to shut anything down.
+// TestShutdown_DrainsInFlightThenFlushes exercises the SAME shutdown sequence main.go
+// uses (copied into runShutdownSequence below) against an in-process server with a slow
+// handler and a fakeFlusher standing in for the analytics pipeline. It was written on
+// stream/f-ops before any store driver existed, and it remains the precise test of
+// sequencing and budgets.
 //
-// This test instead exercises the SAME shutdown sequence main.go uses (copied into
-// runShutdownSequence below, matching main.go's run() almost line for line) against an
-// in-process httptest-style server with a slow handler standing in for real request
-// work and a fakeFlusher standing in for the analytics pipeline's buffered-event flush.
-// It is a faithful test of the sequencing and budgets, just not of process-level signal
-// delivery or driver wiring.
-//
-// A real-binary variant is skipped explicitly (see TestShutdown_RealBinary) rather than
-// omitted, so its absence shows up as a visible skip once a store driver exists
-// (Stage 3), not as a silently missing test today.
+// TestShutdown_RealBinary (Stage 3, T096-literal, quickstart Scenario 8) builds and
+// execs the actual qurator binary, sends SIGTERM while 500 scans are in flight, and
+// asserts from the outside: exit 0, no accepted request dropped, and after a restart on
+// the same data directory the analytics total equals the number of 302s served.
 package integration
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -174,11 +169,135 @@ func TestShutdown_DrainsInFlightThenFlushes(t *testing.T) {
 	}
 }
 
-// TestShutdown_RealBinary is the T096-literal scenario: build the actual qurator
-// binary, start it, send SIGTERM under load, assert on its behavior from the outside.
-// It is skipped because no store driver is registered on this branch — see the package
-// doc for why — and will be enabled once Stage 3 merges a driver (internal/store/sqlite
-// or postgres) that main.go blank-imports.
+// itScanUA is a browser-looking User-Agent so scans classify as ordinary traffic.
+const itScanUA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0 Safari/537.36"
+
+// itScanOutcome is what one concurrent scanner observed.
+type itScanOutcome struct {
+	status int
+	err    error
+}
+
+// TestShutdown_RealBinary is the T096-literal scenario (SC-014): start the real
+// binary, fire 500 scans concurrently, SIGTERM it while they are in flight.
+//
+// Requests the server ACCEPTED must all finish with an HTTP status: a connection reset
+// or EOF mid-request is a drain failure. Requests that never reached the server because
+// the listener had already closed surface as "connection refused"; those were not sent
+// before SIGTERM in any meaningful sense and are tolerated (but counted and logged).
+// The number of 302s observed is the number of scan events the store must hold after a
+// restart — flush-on-shutdown must lose none of them.
 func TestShutdown_RealBinary(t *testing.T) {
-	t.Skip("requires a registered store driver; enabled in Stage 3")
+	const (
+		scans       = 500
+		alias       = "drain"
+		destination = "https://example.com/drain"
+		// SIGTERM is sent once this many scans have completed, so the process is
+		// demonstrably serving when the signal lands and the rest are in flight.
+		signalAfter = 25
+	)
+	dir := t.TempDir()
+	env := itDevAdminEnv()
+	p := itStartWithBase(t, dir, env)
+
+	s, _ := itSignin(t, p.Base, itAdminEmail, itAdminPassword)
+	created := s.itDo(http.MethodPost, "/v1/codes", map[string]any{"destination": destination, "alias": alias}, nil)
+	if created.Status != http.StatusCreated {
+		t.Fatalf("create code: %d %s", created.Status, created.Body)
+	}
+	codeID, _ := created.JSON["id"].(string)
+
+	// One transport for all scanners; a bounded connection pool keeps the burst within
+	// the listen backlog so nothing is dropped by the kernel rather than the server.
+	transport := &http.Transport{MaxConnsPerHost: 64, MaxIdleConnsPerHost: 64}
+	t.Cleanup(transport.CloseIdleConnections)
+	client := &http.Client{
+		Transport: transport,
+		Timeout:   30 * time.Second,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	scanURL := p.Base + "/r/" + alias
+
+	var (
+		completed atomic.Int64
+		wg        sync.WaitGroup
+		outcomes  = make([]itScanOutcome, scans)
+		signalled = make(chan struct{})
+	)
+	for i := 0; i < scans; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			req, _ := http.NewRequest(http.MethodGet, scanURL, nil)
+			req.Header.Set("User-Agent", itScanUA)
+			resp, err := client.Do(req)
+			if err != nil {
+				outcomes[i] = itScanOutcome{err: err}
+				return
+			}
+			_, _ = io.Copy(io.Discard, resp.Body)
+			_ = resp.Body.Close()
+			outcomes[i] = itScanOutcome{status: resp.StatusCode}
+			if completed.Add(1) == signalAfter {
+				close(signalled)
+			}
+		}(i)
+	}
+
+	select {
+	case <-signalled:
+	case <-time.After(20 * time.Second):
+		t.Fatalf("fewer than %d scans completed in 20s (%d); stderr:\n%s", signalAfter, completed.Load(), p.Stderr.String())
+	}
+	p.Signal(t, syscall.SIGTERM)
+	wg.Wait()
+
+	if code := p.Wait(t, 25*time.Second); code != 0 {
+		t.Fatalf("exit code %d after SIGTERM, want 0; stderr:\n%s", code, p.Stderr.String())
+	}
+
+	var served, refused int64
+	for i, o := range outcomes {
+		switch {
+		case o.err == nil && o.status == http.StatusFound:
+			served++
+		case o.err == nil:
+			t.Errorf("scan %d: status %d, want 302", i, o.status)
+		case itIsConnRefused(o.err):
+			refused++ // never reached the server: the listener was already closed
+		default:
+			t.Errorf("scan %d: accepted request did not complete cleanly: %v", i, o.err)
+		}
+	}
+	t.Logf("scans: %d served 302, %d refused after listener close", served, refused)
+	if served < signalAfter {
+		t.Fatalf("only %d scans served, want at least %d", served, signalAfter)
+	}
+
+	// Restart on the same data directory: everything flushed at shutdown must be there,
+	// and nothing that was never served must be.
+	p2 := itStartWithBase(t, dir, env)
+	s2, _ := itSignin(t, p2.Base, itAdminEmail, itAdminPassword)
+	an := itWaitAnalyticsTotal(s2, codeID, served, 15*time.Second)
+	if an.Status != http.StatusOK {
+		t.Fatalf("analytics after restart: %d %s", an.Status, an.Body)
+	}
+	if got := itAnalyticsTotal(an); got != served {
+		t.Fatalf("analytics total after restart = %d, want %d (302s served before shutdown); stderr of first run:\n%s", got, served, p.Stderr.String())
+	}
+	p2.Signal(t, syscall.SIGTERM)
+	if code := p2.Wait(t, 20*time.Second); code != 0 {
+		t.Fatalf("second instance exit code %d, want 0", code)
+	}
+}
+
+// itIsConnRefused reports whether err is a dial failure against a closed listener.
+func itIsConnRefused(err error) bool {
+	if errors.Is(err, syscall.ECONNREFUSED) {
+		return true
+	}
+	var opErr *net.OpError
+	return errors.As(err, &opErr) && opErr.Op == "dial"
 }

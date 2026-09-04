@@ -410,29 +410,39 @@ func (g generateRequest) toOptions() (qr.Options, error) {
 		}
 	}
 	if s.Logo != nil {
-		if s.Logo.ImageBase64 == "" {
-			return o, &fieldError{"logo.image_base64", "is required"}
-		}
-		if len(s.Logo.ImageBase64) > qr.MaxLogoBytes*4/3+4 {
-			return o, &fieldError{"logo.image_base64", fmt.Sprintf("must decode to at most %d bytes", qr.MaxLogoBytes)}
-		}
-		data, err := base64.StdEncoding.DecodeString(s.Logo.ImageBase64)
+		logo, err := s.Logo.decode()
 		if err != nil {
-			return o, &fieldError{"logo.image_base64", "is not valid base64"}
-		}
-		logo := &qr.Logo{Image: data, Scale: defaultLogoScale, AutoRaise: true}
-		if s.Logo.Scale != nil {
-			logo.Scale = *s.Logo.Scale
-		}
-		if s.Logo.AutoRaise != nil {
-			logo.AutoRaise = *s.Logo.AutoRaise
-		}
-		if err := validateLogo(logo); err != nil {
 			return o, err
 		}
 		o.Logo = logo
 	}
 	return o, nil
+}
+
+// decode validates the JSON logo spec and produces the renderer's Logo. Both /v1/qr and
+// POST /v1/codes go through it so a logo is accepted or rejected identically on each.
+func (l *logoSpec) decode() (*qr.Logo, error) {
+	if l.ImageBase64 == "" {
+		return nil, &fieldError{"logo.image_base64", "is required"}
+	}
+	if len(l.ImageBase64) > qr.MaxLogoBytes*4/3+4 {
+		return nil, &fieldError{"logo.image_base64", fmt.Sprintf("must decode to at most %d bytes", qr.MaxLogoBytes)}
+	}
+	data, err := base64.StdEncoding.DecodeString(l.ImageBase64)
+	if err != nil {
+		return nil, &fieldError{"logo.image_base64", "is not valid base64"}
+	}
+	logo := &qr.Logo{Image: data, Scale: defaultLogoScale, AutoRaise: true}
+	if l.Scale != nil {
+		logo.Scale = *l.Scale
+	}
+	if l.AutoRaise != nil {
+		logo.AutoRaise = *l.AutoRaise
+	}
+	if err := validateLogo(logo); err != nil {
+		return nil, err
+	}
+	return logo, nil
 }
 
 // ---- error mapping ---------------------------------------------------------------------

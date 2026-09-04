@@ -13,9 +13,6 @@ type Manifest struct {
 	Version    string           `json:"version"`
 	ExportedAt time.Time        `json:"exported_at"`
 	Entities   map[string]int64 `json:"entities"`
-	// Omitted names entities that could not be exported, with why, keyed the same as
-	// Entities. An entity never appears in both maps.
-	Omitted map[string]string `json:"omitted,omitempty"`
 }
 
 // userRecord is the users.jsonl row shape. It deliberately excludes PasswordHash: an
@@ -48,11 +45,12 @@ type tokenRecord struct {
 	ExpiresAt  *time.Time `json:"expires_at,omitempty"`
 }
 
-// ReservationRecord is the alias_reservations.jsonl row shape, matching the
-// alias_reservations table in data-model.md: a reservation outlives the code that made
-// it (FR-018), so CodeID is empty once the owning code is deleted.
-type ReservationRecord struct {
-	ShortCode  string    `json:"short_code"`
-	CodeID     string    `json:"code_id,omitempty"`
-	ReservedAt time.Time `json:"reserved_at"`
+// reservationRecord is the alias_reservations.jsonl row shape, mirroring
+// domain.AliasReservation: a reservation outlives the code that made it (FR-018) and is
+// kept, with released_at set, after an admin releases it.
+type reservationRecord struct {
+	ShortCode  string     `json:"short_code"`
+	CodeID     string     `json:"code_id,omitempty"`
+	ReservedAt time.Time  `json:"reserved_at"`
+	ReleasedAt *time.Time `json:"released_at,omitempty"`
 }

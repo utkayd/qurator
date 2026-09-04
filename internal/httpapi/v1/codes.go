@@ -2,7 +2,6 @@ package v1
 
 import (
 	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"regexp"
@@ -13,6 +12,7 @@ import (
 	"github.com/utkayd/qurator/internal/codes"
 	"github.com/utkayd/qurator/internal/domain"
 	"github.com/utkayd/qurator/internal/httpapi"
+	"github.com/utkayd/qurator/internal/qr"
 	"github.com/utkayd/qurator/internal/store"
 )
 
@@ -69,14 +69,16 @@ func (h *CodesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // ---- wire shapes ---------------------------------------------------------------------
 
+// stylingRequest mirrors OpenAPI StylingRequest for dynamic codes. The logo spec is the
+// one /v1/qr uses (qr.go) so both paths accept identical input.
 type stylingRequest struct {
-	FgColor       *string          `json:"fg_color"`
-	BgColor       *string          `json:"bg_color"`
-	ModuleShape   *string          `json:"module_shape"`
-	MarginModules *int             `json:"margin_modules"`
-	SizePx        *int             `json:"size_px"`
-	ECLevel       *string          `json:"ec_level"`
-	Logo          *json.RawMessage `json:"logo"`
+	FgColor       *string   `json:"fg_color"`
+	BgColor       *string   `json:"bg_color"`
+	ModuleShape   *string   `json:"module_shape"`
+	MarginModules *int      `json:"margin_modules"`
+	SizePx        *int      `json:"size_px"`
+	ECLevel       *string   `json:"ec_level"`
+	Logo          *logoSpec `json:"logo"`
 }
 
 type createCodeRequest struct {
@@ -147,24 +149,33 @@ func (h *CodesHandler) toResponse(c *domain.Code) codeResponse {
 var hexColorRe = regexp.MustCompile(`^#[0-9A-Fa-f]{6}$`)
 
 // stylingFromRequest validates the StylingRequest schema bounds; the renderer applies
-// the deeper checks (contrast, logo area) it owns.
-func stylingFromRequest(in *stylingRequest) (domain.Styling, string, bool) {
-	var out domain.Styling
+// the deeper checks (contrast, logo area) it owns. The decoded logo bytes and the
+// auto_raise flag travel beside the Styling because neither is persisted as-is.
+func stylingFromRequest(in *stylingRequest) (out domain.Styling, logo []byte, autoRaise bool, field string, ok bool) {
 	if in == nil {
-		return out, "", true
+		return out, nil, false, "", true
 	}
 	if in.Logo != nil {
-		return out, "styling.logo", false // logos on dynamic codes arrive with the renderer stream
+		l, err := in.Logo.decode()
+		if err != nil {
+			var fe *fieldError
+			if errors.As(err, &fe) {
+				return out, nil, false, "styling." + fe.field, false
+			}
+			return out, nil, false, "styling.logo", false
+		}
+		logo, autoRaise = l.Image, l.AutoRaise
+		out.LogoScale = l.Scale
 	}
 	if in.FgColor != nil {
 		if !hexColorRe.MatchString(*in.FgColor) {
-			return out, "styling.fg_color", false
+			return out, nil, false, "styling.fg_color", false
 		}
 		out.FgColor = *in.FgColor
 	}
 	if in.BgColor != nil {
 		if !hexColorRe.MatchString(*in.BgColor) {
-			return out, "styling.bg_color", false
+			return out, nil, false, "styling.bg_color", false
 		}
 		out.BgColor = *in.BgColor
 	}
@@ -173,18 +184,18 @@ func stylingFromRequest(in *stylingRequest) (domain.Styling, string, bool) {
 		case domain.ShapeSquare, domain.ShapeDot, domain.ShapeRounded:
 			out.ModuleShape = domain.ModuleShape(*in.ModuleShape)
 		default:
-			return out, "styling.module_shape", false
+			return out, nil, false, "styling.module_shape", false
 		}
 	}
 	if in.MarginModules != nil {
 		if *in.MarginModules < 4 || *in.MarginModules > 64 {
-			return out, "styling.margin_modules", false
+			return out, nil, false, "styling.margin_modules", false
 		}
 		out.MarginModules = *in.MarginModules
 	}
 	if in.SizePx != nil {
 		if *in.SizePx < 64 || *in.SizePx > 4096 {
-			return out, "styling.size_px", false
+			return out, nil, false, "styling.size_px", false
 		}
 		out.SizePx = *in.SizePx
 	}
@@ -193,10 +204,21 @@ func stylingFromRequest(in *stylingRequest) (domain.Styling, string, bool) {
 		case domain.ECLow, domain.ECMedium, domain.ECQuartile, domain.ECHigh:
 			out.ECLevel = domain.ECLevel(*in.ECLevel)
 		default:
-			return out, "styling.ec_level", false
+			return out, nil, false, "styling.ec_level", false
 		}
 	}
-	return out, "", true
+	return out, logo, autoRaise, "", true
+}
+
+// isRenderError reports whether err came from the renderer's own validation (contrast,
+// logo budget, size, payload, timeout). These share /v1/qr's error mapping.
+func isRenderError(err error) bool {
+	return errors.Is(err, qr.ErrContrastTooLow) ||
+		errors.Is(err, qr.ErrLogoTooLarge) ||
+		errors.Is(err, qr.ErrDimensionsExceeded) ||
+		errors.Is(err, qr.ErrRenderTimeout) ||
+		errors.Is(err, qr.ErrContentTooLarge) ||
+		errors.Is(err, qr.ErrInvalidOption)
 }
 
 // writeServiceError maps service and store errors onto the stable catalogue.
@@ -208,6 +230,8 @@ func writeServiceError(w http.ResponseWriter, r *http.Request, err error) {
 	}
 	var ce *codes.ConflictError
 	switch {
+	case isRenderError(err):
+		writeQRError(w, r, err)
 	case errors.As(err, &ce):
 		httpapi.WriteError(w, httpapi.CodeConflict, "The code was modified by another request; re-read it and retry with its current version.",
 			map[string]any{"expected": ce.Expected, "actual": ce.Actual})
@@ -243,12 +267,19 @@ func (h *CodesHandler) create(w http.ResponseWriter, r *http.Request, userID str
 		httpapi.WriteError(w, httpapi.CodeInvalidRequest, "A destination is required.", map[string]any{"field": "destination"})
 		return
 	}
-	styling, field, ok := stylingFromRequest(req.Styling)
+	styling, logo, autoRaise, field, ok := stylingFromRequest(req.Styling)
 	if !ok {
 		httpapi.WriteError(w, httpapi.CodeInvalidRequest, "A styling parameter is out of range or unsupported.", map[string]any{"field": field})
 		return
 	}
-	c, err := h.svc.Create(r.Context(), codes.CreateInput{UserID: userID, Destination: req.Destination, Alias: req.Alias, Styling: styling})
+	c, err := h.svc.Create(r.Context(), codes.CreateInput{
+		UserID:        userID,
+		Destination:   req.Destination,
+		Alias:         req.Alias,
+		Styling:       styling,
+		Logo:          logo,
+		LogoAutoRaise: autoRaise,
+	})
 	if err != nil {
 		writeServiceError(w, r, err)
 		return

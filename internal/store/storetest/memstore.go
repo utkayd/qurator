@@ -27,7 +27,8 @@ type memStore struct {
 	byCode map[string]string           // lower(short_code) -> code ID (live and deleted rows)
 
 	// reservations mirrors alias_reservations: lower(short_code) -> reservation. A
-	// reservation survives DeleteCode and is removed only by ReleaseAlias.
+	// reservation survives DeleteCode; ReleaseAlias marks it released rather than
+	// removing it, and a later CreateCode for the same short code re-arms the same row.
 	reservations map[string]*reservation
 
 	events  []scanRow
@@ -38,7 +39,10 @@ type memStore struct {
 type reservation struct {
 	codeID     string
 	reservedAt time.Time
+	releasedAt *time.Time
 }
+
+func (r *reservation) taken() bool { return r.releasedAt == nil }
 
 type scanRow struct {
 	seq int64
@@ -250,7 +254,7 @@ func (m *memStore) CreateCode(ctx context.Context, c *domain.Code) error {
 	if _, taken := m.byCode[key]; taken {
 		return fmt.Errorf("memstore: short code %q: %w", c.ShortCode, store.ErrAliasTaken)
 	}
-	if _, reserved := m.reservations[key]; reserved {
+	if r, reserved := m.reservations[key]; reserved && r.taken() {
 		return fmt.Errorf("memstore: short code %q reserved: %w", c.ShortCode, store.ErrAliasTaken)
 	}
 
@@ -484,10 +488,7 @@ func (m *memStore) DeleteCode(ctx context.Context, id, userID string) error {
 	c.DeletedAt = &now
 	c.Version++
 	c.UpdatedAt = now
-	// The reservation stays; only its link to a live code is gone (FK set NULL).
-	if r, ok := m.reservations[c.ShortCode]; ok && r.codeID == c.ID {
-		r.codeID = ""
-	}
+	// The reservation stays, still pointing at the (now deleted) code (FR-018).
 	return nil
 }
 
@@ -503,7 +504,7 @@ func (m *memStore) IsAliasAvailable(ctx context.Context, shortCode string) (bool
 	if _, taken := m.byCode[key]; taken {
 		return false, nil
 	}
-	if _, reserved := m.reservations[key]; reserved {
+	if r, reserved := m.reservations[key]; reserved && r.taken() {
 		return false, nil
 	}
 	return true, nil
@@ -517,15 +518,14 @@ func (m *memStore) ReleaseAlias(ctx context.Context, shortCode string) error {
 	defer m.mu.Unlock()
 	key := strings.ToLower(shortCode)
 	r, ok := m.reservations[key]
-	if !ok {
+	if !ok || !r.taken() {
 		return fmt.Errorf("memstore: alias %q not reserved: %w", shortCode, store.ErrNotFound)
 	}
-	if r.codeID != "" {
-		if c, live := m.codes[r.codeID]; live && c.State != domain.CodeDeleted {
-			return fmt.Errorf("memstore: alias %q owned by live code: %w", shortCode, store.ErrConflict)
-		}
+	if c, live := m.codes[r.codeID]; live && c.State != domain.CodeDeleted {
+		return fmt.Errorf("memstore: alias %q owned by live code: %w", shortCode, store.ErrConflict)
 	}
-	delete(m.reservations, key)
+	released := time.Now().UTC()
+	r.releasedAt = &released
 	// The deleted row keeps its short_code column, but it no longer blocks the namespace
 	// and no longer resolves: the released alias is free to be re-registered.
 	if id, exists := m.byCode[key]; exists {
@@ -676,6 +676,114 @@ func (m *memStore) PruneScanEvents(ctx context.Context, before time.Time, limit 
 	}
 	m.events = kept
 	return int64(len(victims)), nil
+}
+
+// ---- bulk iteration ------------------------------------------------------------------
+//
+// Each walker snapshots the table under the lock and invokes fn with the lock released,
+// because fn is allowed to call back into the store (export lists tokens per user from
+// inside ForEachUser). A snapshot is fine here — this is a test fixture, not a driver.
+
+func (m *memStore) ForEachUser(ctx context.Context, fn func(*domain.User) error) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	rows := make([]*domain.User, 0, len(m.users))
+	for _, u := range m.users {
+		rows = append(rows, copyUser(u))
+	}
+	m.mu.Unlock()
+	sort.Slice(rows, func(i, j int) bool { return rows[i].ID < rows[j].ID })
+	for _, u := range rows {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := fn(u); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (m *memStore) ForEachCode(ctx context.Context, fn func(*domain.Code) error) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	rows := make([]*domain.Code, 0, len(m.codes))
+	for _, c := range m.codes {
+		rows = append(rows, copyCode(c))
+	}
+	m.mu.Unlock()
+	sort.Slice(rows, func(i, j int) bool { return rows[i].ID < rows[j].ID })
+	for _, c := range rows {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := fn(c); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (m *memStore) ForEachRollup(ctx context.Context, fn func(domain.RollupDelta) error) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	rows := make([]domain.RollupDelta, 0, len(m.rollups))
+	for k, n := range m.rollups {
+		rows = append(rows, domain.RollupDelta{CodeID: k.codeID, HourBucket: k.hour, Dimension: k.dim, Value: k.value, Count: n})
+	}
+	m.mu.Unlock()
+	sort.Slice(rows, func(i, j int) bool {
+		a, b := rows[i], rows[j]
+		if a.CodeID != b.CodeID {
+			return a.CodeID < b.CodeID
+		}
+		if !a.HourBucket.Equal(b.HourBucket) {
+			return a.HourBucket.Before(b.HourBucket)
+		}
+		if a.Dimension != b.Dimension {
+			return a.Dimension < b.Dimension
+		}
+		return a.Value < b.Value
+	})
+	for _, r := range rows {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := fn(r); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (m *memStore) ForEachReservation(ctx context.Context, fn func(domain.AliasReservation) error) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	rows := make([]domain.AliasReservation, 0, len(m.reservations))
+	for sc, r := range m.reservations {
+		rows = append(rows, domain.AliasReservation{
+			ShortCode: sc, CodeID: r.codeID, ReservedAt: r.reservedAt.UTC(), ReleasedAt: copyTimePtr(r.releasedAt),
+		})
+	}
+	m.mu.Unlock()
+	sort.Slice(rows, func(i, j int) bool { return rows[i].ShortCode < rows[j].ShortCode })
+	for _, r := range rows {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := fn(r); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // ---- lifecycle -----------------------------------------------------------------------

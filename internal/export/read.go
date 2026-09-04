@@ -16,12 +16,13 @@ import (
 // ErrNotEmpty is returned by Read when st already has users and force is false.
 var ErrNotEmpty = errors.New("export: store already has users; pass force to import anyway")
 
-// Read replays a tar archive produced by Write into st. api_tokens rows are counted but
-// never recreated (see manifest.go: an export never carries a usable secret hash, so
-// there is nothing safe to restore) and alias_reservations rows are counted but not
-// recreated either — store.Store has no method to insert a bare reservation without an
-// owning code (another instance of the gap documented in the package doc); both counts
-// still surface as informational log lines so an operator is not silently missing data.
+// Read replays a tar archive produced by Write into st. api_tokens rows are never
+// recreated (see manifest.go: an export never carries a usable secret hash, so there is
+// nothing safe to restore). alias_reservations rows are not inserted as such: every
+// unreleased reservation belongs to an exported code (deleted ones included), and
+// CreateCode re-reserves the short code as it recreates that code. A released
+// reservation is replayed by releasing the recreated (deleted) code's alias again, so
+// a short code that was free before the export is free after the import.
 func Read(ctx context.Context, st store.Store, r io.Reader, force bool) error {
 	if !force {
 		n, err := st.CountUsers(ctx)
@@ -69,9 +70,8 @@ func Read(ctx context.Context, st store.Store, r io.Reader, force bool) error {
 				return err
 			}
 		case fileReservations:
-			// Intentionally not recreated; see the doc comment above.
-			if err := drainJSONL(tr, func([]byte) error { return nil }); err != nil {
-				return fmt.Errorf("export: skip %s: %w", fileReservations, err)
+			if err := importReservations(ctx, st, tr, codeIDs); err != nil {
+				return err
 			}
 		case fileRollups:
 			if err := importRollups(ctx, st, tr, codeIDs); err != nil {
@@ -119,16 +119,47 @@ func importUsers(ctx context.Context, st store.Store, r io.Reader) error {
 	})
 }
 
+// importCodes recreates every code. A deleted code is recreated then soft-deleted
+// again, so its short code ends up reserved-but-not-live exactly as it was (FR-018);
+// its DeletedAt becomes the import time, since CreateCode never accepts one.
 func importCodes(ctx context.Context, st store.Store, r io.Reader, codeIDs map[string]bool) error {
 	return drainJSONL(r, func(line []byte) error {
 		var c domain.Code
 		if err := json.Unmarshal(line, &c); err != nil {
 			return fmt.Errorf("export: decode code row: %w", err)
 		}
+		deleted := c.State == domain.CodeDeleted
+		if deleted {
+			c.State = domain.CodeDisabled
+		}
 		if err := st.CreateCode(ctx, &c); err != nil {
 			return fmt.Errorf("export: create code %q: %w", c.ShortCode, err)
 		}
+		if deleted {
+			if err := st.DeleteCode(ctx, c.ID, c.UserID); err != nil {
+				return fmt.Errorf("export: re-delete code %q: %w", c.ShortCode, err)
+			}
+		}
 		codeIDs[c.ID] = true
+		return nil
+	})
+}
+
+// importReservations re-releases every reservation the export recorded as released.
+// Unreleased ones were already re-created by importCodes (Write puts codes before
+// reservations in the archive, so the codes exist by now).
+func importReservations(ctx context.Context, st store.Store, r io.Reader, codeIDs map[string]bool) error {
+	return drainJSONL(r, func(line []byte) error {
+		var rec reservationRecord
+		if err := json.Unmarshal(line, &rec); err != nil {
+			return fmt.Errorf("export: decode reservation row: %w", err)
+		}
+		if rec.ReleasedAt == nil || !codeIDs[rec.CodeID] {
+			return nil
+		}
+		if err := st.ReleaseAlias(ctx, rec.ShortCode); err != nil {
+			return fmt.Errorf("export: release alias %q: %w", rec.ShortCode, err)
+		}
 		return nil
 	})
 }
@@ -152,8 +183,8 @@ func importRollups(ctx context.Context, st store.Store, r io.Reader, codeIDs map
 			return fmt.Errorf("export: decode rollup row: %w", err)
 		}
 		if !codeIDs[rd.CodeID] {
-			// The owning code was not (re)created — e.g. a codes-omitted degraded
-			// export. Skip rather than fail the whole import.
+			// The owning code is not in this archive (a hand-edited or truncated
+			// dump). Skip rather than fail the whole import.
 			return nil
 		}
 		batch = append(batch, rd)

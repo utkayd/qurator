@@ -52,8 +52,8 @@ type Flusher interface {
 // persisted PNG for a dynamic code, rendered with the code's stored styling.
 type codesRenderer struct{ r *qr.Renderer }
 
-func (c codesRenderer) Render(ctx context.Context, content string, s domain.Styling) ([]byte, error) {
-	res, err := c.r.Render(ctx, qr.Options{
+func (c codesRenderer) Render(ctx context.Context, content string, s domain.Styling, logo []byte, autoRaise bool) ([]byte, domain.ECLevel, error) {
+	opts := qr.Options{
 		Content: []byte(content),
 		Format:  qr.FormatPNG,
 		FgColor: s.FgColor,
@@ -62,11 +62,15 @@ func (c codesRenderer) Render(ctx context.Context, content string, s domain.Styl
 		Margin:  s.MarginModules,
 		SizePx:  s.SizePx,
 		ECLevel: qr.ECLevel(s.ECLevel),
-	})
-	if err != nil {
-		return nil, err
 	}
-	return res.Bytes, nil
+	if logo != nil {
+		opts.Logo = &qr.Logo{Image: logo, Scale: s.LogoScale, AutoRaise: autoRaise}
+	}
+	res, err := c.r.Render(ctx, opts)
+	if err != nil {
+		return nil, "", err
+	}
+	return res.Bytes, domain.ECLevel(res.ECLevelEffective), nil
 }
 
 func main() {

@@ -3,8 +3,12 @@ package contract
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"image"
+	"image/color"
+	"image/png"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -18,6 +22,7 @@ import (
 	"github.com/utkayd/qurator/internal/httpapi"
 	"github.com/utkayd/qurator/internal/httpapi/public"
 	v1 "github.com/utkayd/qurator/internal/httpapi/v1"
+	"github.com/utkayd/qurator/internal/qr"
 	"github.com/utkayd/qurator/internal/store"
 	"github.com/utkayd/qurator/internal/store/storetest"
 )
@@ -31,8 +36,33 @@ const (
 // embeds the content so a test can prove the encoded value is the scan URL.
 type fakeRenderer struct{}
 
-func (fakeRenderer) Render(_ context.Context, content string, _ domain.Styling) ([]byte, error) {
-	return []byte("\x89PNG\r\n\x1a\n" + content), nil
+func (fakeRenderer) Render(_ context.Context, content string, s domain.Styling, _ []byte, _ bool) ([]byte, domain.ECLevel, error) {
+	return []byte("\x89PNG\r\n\x1a\n" + content), s.ECLevel, nil
+}
+
+// realRenderer is a local copy of cmd/qurator's codesRenderer adapter over the real
+// internal/qr renderer, so the logo tests exercise the genuine budget arithmetic.
+type realRenderer struct{ r *qr.Renderer }
+
+func (c realRenderer) Render(ctx context.Context, content string, s domain.Styling, logo []byte, autoRaise bool) ([]byte, domain.ECLevel, error) {
+	opts := qr.Options{
+		Content: []byte(content),
+		Format:  qr.FormatPNG,
+		FgColor: s.FgColor,
+		BgColor: s.BgColor,
+		Shape:   qr.ModuleShape(s.ModuleShape),
+		Margin:  s.MarginModules,
+		SizePx:  s.SizePx,
+		ECLevel: qr.ECLevel(s.ECLevel),
+	}
+	if logo != nil {
+		opts.Logo = &qr.Logo{Image: logo, Scale: s.LogoScale, AutoRaise: autoRaise}
+	}
+	res, err := c.r.Render(ctx, opts)
+	if err != nil {
+		return nil, "", err
+	}
+	return res.Bytes, domain.ECLevel(res.ECLevelEffective), nil
 }
 
 type fixture struct {
@@ -58,12 +88,17 @@ func identityFromHeader(r *http.Request) (string, bool) {
 
 func newFixture(t *testing.T, st store.Store, fallback string) *fixture {
 	t.Helper()
+	return newFixtureWith(t, st, fallback, fakeRenderer{})
+}
+
+func newFixtureWith(t *testing.T, st store.Store, fallback string, r codes.Renderer) *fixture {
+	t.Helper()
 	if st == nil {
 		st = storetest.NewMemStore()
 	}
 	bl := blobtest.NewMemBlob()
 	cache := codes.NewCache()
-	svc := codes.NewService(st, bl, fakeRenderer{}, cache, codes.Config{
+	svc := codes.NewService(st, bl, r, cache, codes.Config{
 		BaseURL:        testBaseURL,
 		AllowedSchemes: []string{"http", "https"},
 	})
@@ -416,5 +451,102 @@ func TestCodes_OwnershipIsolation(t *testing.T) {
 	res, body := f.do(t, "", http.MethodGet, "/v1/codes/"+id, nil, nil)
 	if code, _ := errCodeCodes(t, body); res.StatusCode != http.StatusUnauthorized || code != "unauthorized" {
 		t.Fatalf("anonymous: %d %v", res.StatusCode, body)
+	}
+}
+
+// logoPNG is a generated 32x32 opaque PNG, base64-encoded for the JSON body.
+func logoPNG(t *testing.T) (raw []byte, b64 string) {
+	t.Helper()
+	img := image.NewRGBA(image.Rect(0, 0, 32, 32))
+	for y := 0; y < 32; y++ {
+		for x := 0; x < 32; x++ {
+			img.Set(x, y, color.RGBA{R: 0x1f, G: 0x6f, B: 0xd0, A: 0xff})
+		}
+	}
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes(), base64.StdEncoding.EncodeToString(buf.Bytes())
+}
+
+func TestCodes_LogoOnDynamicCode(t *testing.T) {
+	renderer := qr.NewRenderer(qr.Bounds{MaxPx: 1024, MaxDuration: 0, MaxPayload: 2953})
+	f := newFixtureWith(t, nil, "", realRenderer{renderer})
+	rawLogo, b64 := logoPNG(t)
+
+	// Within L's 5% budget: level kept.
+	c := f.create(t, "alice", map[string]any{
+		"destination": "https://example.com/logo",
+		"styling":     map[string]any{"ec_level": "L", "logo": map[string]any{"image_base64": b64, "scale": 0.04}},
+	})
+	st := c["styling"].(map[string]any)
+	if st["ec_level"] != "L" || st["ec_level_effective"] != "L" || st["has_logo"] != true {
+		t.Fatalf("scale 0.04 at L: styling %v", st)
+	}
+	id := c["id"].(string)
+	rc, info, err := f.blob.Get(context.Background(), codes.LogoBlobKeyFor(id))
+	if err != nil {
+		t.Fatalf("logo blob missing: %v", err)
+	}
+	got, _ := io.ReadAll(rc)
+	rc.Close()
+	if !bytes.Equal(got, rawLogo) {
+		t.Fatalf("logo blob is not the original bytes (%d vs %d)", len(got), len(rawLogo))
+	}
+	if info.ContentType != "image/png" {
+		t.Fatalf("logo content type = %q, want image/png", info.ContentType)
+	}
+	if rc, _, err := f.blob.Get(context.Background(), codes.BlobKeyFor(id)); err != nil {
+		t.Fatalf("image blob missing: %v", err)
+	} else {
+		raw, _ := io.ReadAll(rc)
+		rc.Close()
+		if _, err := png.Decode(bytes.NewReader(raw)); err != nil {
+			t.Fatalf("persisted image is not a PNG: %v", err)
+		}
+	}
+	// The stored row records the effective level and the logo key (FR-027).
+	row, err := f.store.GetCodeByID(context.Background(), id, f.users["alice"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row.Styling.ECLevelEffective != domain.ECLow || row.Styling.LogoBlobKey != codes.LogoBlobKeyFor(id) || row.Styling.LogoScale != 0.04 {
+		t.Fatalf("persisted styling: %+v", row.Styling)
+	}
+
+	// Over L's budget with auto_raise: raised to the first level that fits (0.22 -> H).
+	c = f.create(t, "alice", map[string]any{
+		"destination": "https://example.com/logo",
+		"styling":     map[string]any{"ec_level": "L", "logo": map[string]any{"image_base64": b64, "scale": 0.22, "auto_raise": true}},
+	})
+	st = c["styling"].(map[string]any)
+	if st["ec_level"] != "L" || st["ec_level_effective"] != "H" {
+		t.Fatalf("scale 0.22 at L with auto_raise: styling %v", st)
+	}
+
+	// Over budget with auto_raise off: rejected, nothing persisted.
+	res, body := f.do(t, "alice", http.MethodPost, "/v1/codes", map[string]any{
+		"destination": "https://example.com/logo",
+		"styling":     map[string]any{"ec_level": "L", "logo": map[string]any{"image_base64": b64, "scale": 0.22, "auto_raise": false}},
+	}, nil)
+	code, details := errCodeCodes(t, body)
+	if res.StatusCode != http.StatusBadRequest || code != "logo_too_large" {
+		t.Fatalf("scale 0.22 at L without auto_raise: %d %v", res.StatusCode, body)
+	}
+	if details["max_scale"] != 0.05 || details["ec_level"] != "L" || details["scale"] != 0.22 {
+		t.Fatalf("logo_too_large details: %v", details)
+	}
+	if res, body := f.do(t, "alice", http.MethodGet, "/v1/codes", nil, nil); res.StatusCode != http.StatusOK || len(body["items"].([]any)) != 2 {
+		t.Fatalf("rejected create left a row behind: %v", body)
+	}
+
+	// Malformed logo spec is a schema error, not a renderer error.
+	res, body = f.do(t, "alice", http.MethodPost, "/v1/codes", map[string]any{
+		"destination": "https://example.com/logo",
+		"styling":     map[string]any{"logo": map[string]any{"image_base64": "%%%not-base64"}},
+	}, nil)
+	if code, details := errCodeCodes(t, body); res.StatusCode != http.StatusBadRequest || code != "invalid_request" || details["field"] != "styling.logo.image_base64" {
+		t.Fatalf("bad base64: %d %v", res.StatusCode, body)
 	}
 }

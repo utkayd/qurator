@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"net/url"
 	"path"
 	"strings"
@@ -21,8 +22,13 @@ import (
 // instance's scan URL for the short code (FR-007), never the destination. Stream A's
 // internal/qr provides the real implementation; this package depends only on the
 // interface so it can be tested with a fake.
+//
+// logo is the optional centre overlay's original bytes (PNG or JPEG) and autoRaise
+// whether the renderer may raise the EC level to fit it (FR-027). effective is the level
+// actually encoded; it equals s.ECLevel unless a logo forced a raise. Renderer errors
+// are returned to the caller unwrapped so the HTTP layer can map the typed qr errors.
 type Renderer interface {
-	Render(ctx context.Context, content string, s domain.Styling) (png []byte, err error)
+	Render(ctx context.Context, content string, s domain.Styling, logo []byte, autoRaise bool) (png []byte, effective domain.ECLevel, err error)
 }
 
 // Config is the slice of instance configuration the service needs.
@@ -134,6 +140,20 @@ func BlobKeyFor(id string) string {
 	return "codes/" + rnd[0:2] + "/" + rnd[2:4] + "/" + id + ".png"
 }
 
+// LogoBlobKeyFor is the blob key of a code's original logo bytes, sharded like the PNG.
+// It has no extension because the logo may be PNG or JPEG; the stored content type
+// records which.
+func LogoBlobKeyFor(id string) string {
+	rnd := id
+	if i := strings.IndexByte(id, '_'); i >= 0 {
+		rnd = id[i+1:]
+	}
+	for len(rnd) < 4 {
+		rnd += "0"
+	}
+	return "logos/" + rnd[0:2] + "/" + rnd[2:4] + "/" + id
+}
+
 // ---- destination validation (FR-011, FR-012) -----------------------------------------
 
 // ValidateDestination applies the self-reference check first and the scheme allow-list
@@ -220,6 +240,10 @@ func DefaultStyling() domain.Styling {
 	}
 }
 
+// DefaultLogoScale applies when a logo is sent without a scale; it matches the
+// ephemeral endpoint's default so the two paths render identically.
+const DefaultLogoScale = 0.15
+
 func fillStyling(in domain.Styling) domain.Styling {
 	d := DefaultStyling()
 	if in.FgColor == "" {
@@ -254,6 +278,12 @@ type CreateInput struct {
 	Destination string
 	Alias       string // empty = generate
 	Styling     domain.Styling
+	// Logo is the optional centre overlay (original PNG or JPEG bytes). Styling.LogoScale
+	// is its requested scale; a zero scale lets the renderer's default apply.
+	Logo []byte
+	// LogoAutoRaise lets the renderer raise the EC level when the logo exceeds the
+	// requested level's budget (FR-027).
+	LogoAutoRaise bool
 }
 
 // Create validates, chooses the short code, renders and persists the image, then inserts
@@ -267,6 +297,13 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*domain.Code, err
 		return nil, err
 	}
 	styling := fillStyling(in.Styling)
+	// The blob key is assigned here, never taken from the caller.
+	styling.LogoBlobKey = ""
+	if len(in.Logo) == 0 {
+		styling.LogoScale = 0
+	} else if styling.LogoScale == 0 {
+		styling.LogoScale = DefaultLogoScale
+	}
 
 	isAlias := in.Alias != ""
 	var shortCode string
@@ -282,21 +319,50 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*domain.Code, err
 
 	id := domain.NewCodeID()
 	blobKey := BlobKeyFor(id)
+	logoKey := ""
+	if len(in.Logo) > 0 {
+		logoKey = LogoBlobKeyFor(id)
+	}
 	attempts := 1
 	if !isAlias {
 		attempts = generateAttempts
+	}
+	cleanup := func() {
+		for _, k := range []string{blobKey, logoKey} {
+			if k == "" {
+				continue
+			}
+			if delErr := s.blob.Delete(ctx, k); delErr != nil && !errors.Is(delErr, blob.ErrBlobNotFound) {
+				slog.WarnContext(ctx, "codes: orphaned blob after failed create", "key", k, "err", delErr)
+			}
+		}
 	}
 	var lastErr error
 	for i := 0; i < attempts; i++ {
 		if !isAlias {
 			shortCode = shortcode.Generate()
 		}
-		png, err := s.renderer.Render(ctx, s.ScanURL(shortCode), styling)
+		// Renderer errors propagate unwrapped: the typed qr errors (logo_too_large,
+		// contrast_too_low, ...) are part of the API contract and errors.As must reach them.
+		png, effective, err := s.renderer.Render(ctx, s.ScanURL(shortCode), styling, in.Logo, in.LogoAutoRaise)
 		if err != nil {
-			return nil, fmt.Errorf("codes: render: %w", err)
+			cleanup()
+			return nil, err
+		}
+		if effective != "" {
+			styling.ECLevelEffective = effective
+		}
+		if logoKey != "" && styling.LogoBlobKey == "" {
+			ct := http.DetectContentType(in.Logo)
+			if _, err := s.blob.Put(ctx, logoKey, bytes.NewReader(in.Logo), int64(len(in.Logo)), ct); err != nil {
+				cleanup()
+				return nil, fmt.Errorf("codes: store logo: %w", err)
+			}
+			styling.LogoBlobKey = logoKey
 		}
 		etag, err := s.blob.Put(ctx, blobKey, bytes.NewReader(png), int64(len(png)), "image/png")
 		if err != nil {
+			cleanup()
 			return nil, fmt.Errorf("codes: store image: %w", err)
 		}
 		now := s.now()
@@ -328,9 +394,7 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*domain.Code, err
 		}
 		slog.WarnContext(ctx, "codes: generated short code collided; retrying", "attempt", i+1)
 	}
-	if delErr := s.blob.Delete(ctx, blobKey); delErr != nil && !errors.Is(delErr, blob.ErrBlobNotFound) {
-		slog.WarnContext(ctx, "codes: orphaned image after failed create", "key", blobKey, "err", delErr)
-	}
+	cleanup()
 	return nil, lastErr
 }
 
