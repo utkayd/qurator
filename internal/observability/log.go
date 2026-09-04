@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"io"
 	"log/slog"
+	"net/http"
 )
 
 // ctxKey is an unexported type for context keys defined in this package,
@@ -90,4 +91,26 @@ func NewLogger(level, format string, w io.Writer) *slog.Logger {
 	}
 
 	return slog.New(ctxHandler{Handler: base})
+}
+
+type routePatternKey struct{}
+
+// WithRoutePattern records the pattern a route was registered under. The router calls
+// this at registration so metrics and logs label by the authoritative pattern even if a
+// nested mux later rewrites r.Pattern.
+func WithRoutePattern(ctx context.Context, pattern string) context.Context {
+	return context.WithValue(ctx, routePatternKey{}, pattern)
+}
+
+// RoutePattern returns the registered pattern for the request: the context value set by
+// the router, else r.Pattern, else "unmatched". Never the concrete path — that would be
+// one metric series per short code.
+func RoutePattern(r *http.Request) string {
+	if p, ok := r.Context().Value(routePatternKey{}).(string); ok && p != "" {
+		return p
+	}
+	if r.Pattern != "" {
+		return r.Pattern
+	}
+	return "unmatched"
 }

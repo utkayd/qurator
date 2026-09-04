@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"github.com/utkayd/qurator/internal/observability"
 	"log/slog"
 	"net/http"
 	"time"
@@ -16,7 +17,7 @@ func Logging(next http.Handler) http.Handler {
 		next.ServeHTTP(sw, r)
 		slog.InfoContext(r.Context(), "http",
 			"method", r.Method,
-			"route", r.Pattern,
+			"route", observability.RoutePattern(r),
 			"status", sw.status,
 			"bytes", sw.bytes,
 			"duration_ms", float64(time.Since(start).Microseconds())/1000,

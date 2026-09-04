@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/utkayd/qurator/internal/observability"
 	"gopkg.in/yaml.v3"
 )
 
@@ -137,5 +138,22 @@ func TestUnmatchedRedirectsToConsole(t *testing.T) {
 	h.ServeHTTP(rec, httptest.NewRequest("GET", "/", nil))
 	if rec.Code != http.StatusFound || rec.Header().Get("Location") != "/ui/" {
 		t.Fatalf("got %d %q", rec.Code, rec.Header().Get("Location"))
+	}
+}
+
+func TestPerRouteMiddlewareSeesLeafPattern(t *testing.T) {
+	var seen []string
+	capture := func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			seen = append(seen, observability.RoutePattern(r))
+			next.ServeHTTP(w, r)
+		})
+	}
+	h := NewRouter(Handlers{}, Options{PerRoute: []Middleware{capture}})
+	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "/v1/codes/abc", nil))
+	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "/r/xyz", nil))
+	want := []string{"GET /v1/codes/{id}", "GET /r/{code}"}
+	if !reflect.DeepEqual(seen, want) {
+		t.Fatalf("patterns seen = %q, want %q", seen, want)
 	}
 }

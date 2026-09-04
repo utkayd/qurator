@@ -112,17 +112,17 @@ func withBearer(secret string) func(*http.Request) {
 
 func withCSRF(r *http.Request) { r.Header.Set(middleware.CSRFHeader, "1") }
 
-func decode(t *testing.T, rec *httptest.ResponseRecorder, v any) {
+func decodeAuth(t *testing.T, rec *httptest.ResponseRecorder, v any) {
 	t.Helper()
 	if err := json.Unmarshal(rec.Body.Bytes(), v); err != nil {
 		t.Fatalf("decode %q: %v", rec.Body.String(), err)
 	}
 }
 
-func errCode(t *testing.T, rec *httptest.ResponseRecorder) string {
+func errCodeAuth(t *testing.T, rec *httptest.ResponseRecorder) string {
 	t.Helper()
 	var e httpapi.ErrorBody
-	decode(t, rec, &e)
+	decodeAuth(t, rec, &e)
 	return string(e.Error.Code)
 }
 
@@ -142,7 +142,7 @@ func TestSigninCookieAttributes(t *testing.T) {
 		t.Fatalf("signin: %d %s", rec.Code, rec.Body.String())
 	}
 	var u map[string]any
-	decode(t, rec, &u)
+	decodeAuth(t, rec, &u)
 	if u["email"] != adminEmail || u["is_admin"] != true || u["source"] != "local" || u["id"] == nil || u["created_at"] == nil {
 		t.Fatalf("user body = %v", u)
 	}
@@ -180,7 +180,7 @@ func TestSigninUniform401(t *testing.T) {
 		{"email": "nobody@example.com", "password": password},
 	} {
 		rec := e.do(http.MethodPost, "/v1/auth/signin", body)
-		if rec.Code != http.StatusUnauthorized || errCode(t, rec) != "unauthorized" {
+		if rec.Code != http.StatusUnauthorized || errCodeAuth(t, rec) != "unauthorized" {
 			t.Fatalf("signin %v: %d %s", body, rec.Code, rec.Body.String())
 		}
 		if rec.Header().Get("Set-Cookie") != "" {
@@ -188,7 +188,7 @@ func TestSigninUniform401(t *testing.T) {
 		}
 	}
 	rec := e.do(http.MethodPost, "/v1/auth/signin", map[string]string{"email": adminEmail})
-	if rec.Code != http.StatusBadRequest || errCode(t, rec) != "invalid_request" {
+	if rec.Code != http.StatusBadRequest || errCodeAuth(t, rec) != "invalid_request" {
 		t.Fatalf("missing password: %d %s", rec.Code, rec.Body.String())
 	}
 	rec = e.do(http.MethodPost, "/v1/auth/signin", map[string]any{"email": adminEmail, "password": password, "extra": 1})
@@ -202,17 +202,17 @@ func TestMeWithCookieAndBearer(t *testing.T) {
 	c := e.signin(adminEmail)
 	rec := e.do(http.MethodGet, "/v1/auth/me", nil, withCookie(c))
 	var u map[string]any
-	decode(t, rec, &u)
+	decodeAuth(t, rec, &u)
 	if rec.Code != http.StatusOK || u["email"] != adminEmail {
 		t.Fatalf("me via cookie: %d %s", rec.Code, rec.Body.String())
 	}
 	rec = e.do(http.MethodGet, "/v1/auth/me", nil, withBearer(e.bearer(e.user)))
-	decode(t, rec, &u)
+	decodeAuth(t, rec, &u)
 	if rec.Code != http.StatusOK || u["email"] != userEmail || u["is_admin"] != false {
 		t.Fatalf("me via bearer: %d %s", rec.Code, rec.Body.String())
 	}
 	rec = e.do(http.MethodGet, "/v1/auth/me", nil)
-	if rec.Code != http.StatusUnauthorized || errCode(t, rec) != "unauthorized" {
+	if rec.Code != http.StatusUnauthorized || errCodeAuth(t, rec) != "unauthorized" {
 		t.Fatalf("me anonymous: %d %s", rec.Code, rec.Body.String())
 	}
 }
@@ -221,7 +221,7 @@ func TestCSRFAppliesToCookieOnly(t *testing.T) {
 	e := newEnv(t)
 	c := e.signin(userEmail)
 	rec := e.do(http.MethodPost, "/v1/tokens", map[string]string{"name": "ci"}, withCookie(c))
-	if rec.Code != http.StatusForbidden || errCode(t, rec) != "forbidden" {
+	if rec.Code != http.StatusForbidden || errCodeAuth(t, rec) != "forbidden" {
 		t.Fatalf("cookie without CSRF header: %d %s", rec.Code, rec.Body.String())
 	}
 	rec = e.do(http.MethodPost, "/v1/tokens", map[string]string{"name": "ci"}, withCookie(c), withCSRF)
@@ -243,7 +243,7 @@ func TestTokensSecretShownOnce(t *testing.T) {
 		t.Fatalf("create: %d %s", rec.Code, rec.Body.String())
 	}
 	var created map[string]any
-	decode(t, rec, &created)
+	decodeAuth(t, rec, &created)
 	secret, _ := created["secret"].(string)
 	if !strings.HasPrefix(secret, "qur_") || len(secret) != 4+43 {
 		t.Fatalf("secret = %q", secret)
@@ -268,7 +268,7 @@ func TestTokensSecretShownOnce(t *testing.T) {
 		t.Fatalf("list leaks secret material: %s", rec.Body.String())
 	}
 	var list []map[string]any
-	decode(t, rec, &list)
+	decodeAuth(t, rec, &list)
 	if len(list) != 2 {
 		t.Fatalf("list = %v, want 2 tokens (helper + created)", list)
 	}
@@ -306,7 +306,7 @@ func TestTokensSecretShownOnce(t *testing.T) {
 	}
 
 	rec = e.do(http.MethodPost, "/v1/tokens", map[string]any{"name": ""}, withBearer(bearer))
-	if rec.Code != http.StatusBadRequest || errCode(t, rec) != "invalid_request" {
+	if rec.Code != http.StatusBadRequest || errCodeAuth(t, rec) != "invalid_request" {
 		t.Fatalf("empty name: %d %s", rec.Code, rec.Body.String())
 	}
 	rec = e.do(http.MethodPost, "/v1/tokens", map[string]any{"name": "past", "expires_at": "2000-01-01T00:00:00Z"}, withBearer(bearer))
@@ -328,7 +328,7 @@ func TestRevokedTokenRefusedAfterCacheTTL(t *testing.T) {
 		t.Fatal(err)
 	}
 	rec := e.do(http.MethodGet, "/v1/auth/me", nil, withBearer(secret))
-	if rec.Code != http.StatusUnauthorized || errCode(t, rec) != "token_revoked" {
+	if rec.Code != http.StatusUnauthorized || errCodeAuth(t, rec) != "token_revoked" {
 		t.Fatalf("revoked bearer: %d %s", rec.Code, rec.Body.String())
 	}
 }
@@ -368,7 +368,7 @@ func TestAdminReleaseAlias(t *testing.T) {
 	userBearer, adminBearer := e.bearer(e.user), e.bearer(e.admin)
 
 	rec := e.do(http.MethodDelete, "/v1/admin/aliases/spring-sale", nil, withBearer(userBearer))
-	if rec.Code != http.StatusForbidden || errCode(t, rec) != "forbidden" {
+	if rec.Code != http.StatusForbidden || errCodeAuth(t, rec) != "forbidden" {
 		t.Fatalf("non-admin: %d %s", rec.Code, rec.Body.String())
 	}
 	rec = e.do(http.MethodDelete, "/v1/admin/aliases/spring-sale", nil)
@@ -376,7 +376,7 @@ func TestAdminReleaseAlias(t *testing.T) {
 		t.Fatalf("anonymous: %d %s", rec.Code, rec.Body.String())
 	}
 	rec = e.do(http.MethodDelete, "/v1/admin/aliases/spring-sale", nil, withBearer(adminBearer))
-	if rec.Code != http.StatusConflict || errCode(t, rec) != "conflict" {
+	if rec.Code != http.StatusConflict || errCodeAuth(t, rec) != "conflict" {
 		t.Fatalf("live code: %d %s", rec.Code, rec.Body.String())
 	}
 	if err := e.st.DeleteCode(ctx, code.ID, e.user.ID); err != nil {
@@ -387,7 +387,7 @@ func TestAdminReleaseAlias(t *testing.T) {
 		t.Fatalf("release: %d %s", rec.Code, rec.Body.String())
 	}
 	rec = e.do(http.MethodDelete, "/v1/admin/aliases/spring-sale", nil, withBearer(adminBearer))
-	if rec.Code != http.StatusNotFound || errCode(t, rec) != "not_found" {
+	if rec.Code != http.StatusNotFound || errCodeAuth(t, rec) != "not_found" {
 		t.Fatalf("already released: %d %s", rec.Code, rec.Body.String())
 	}
 	if ok, _ := e.st.IsAliasAvailable(ctx, "spring-sale"); !ok {

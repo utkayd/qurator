@@ -124,7 +124,7 @@ func (f *fixture) do(t *testing.T, user, method, path string, body any, hdr map[
 	return res, out
 }
 
-func errCode(t *testing.T, body map[string]any) (string, map[string]any) {
+func errCodeCodes(t *testing.T, body map[string]any) (string, map[string]any) {
 	t.Helper()
 	e, ok := body["error"].(map[string]any)
 	if !ok {
@@ -199,7 +199,7 @@ func TestCodes_AliasConflicts(t *testing.T) {
 	first := f.create(t, "alice", map[string]any{"destination": "https://example.com/", "alias": "spring-sale"})
 
 	res, body := f.do(t, "alice", http.MethodPost, "/v1/codes", map[string]any{"destination": "https://example.com/", "alias": "SPRING-sale"}, nil)
-	if code, details := errCode(t, body); res.StatusCode != http.StatusConflict || code != "alias_taken" || details["alias"] != "spring-sale" {
+	if code, details := errCodeCodes(t, body); res.StatusCode != http.StatusConflict || code != "alias_taken" || details["alias"] != "spring-sale" {
 		t.Fatalf("case-variant alias: %d %v", res.StatusCode, body)
 	}
 
@@ -208,18 +208,18 @@ func TestCodes_AliasConflicts(t *testing.T) {
 		t.Fatalf("DELETE: %d", res.StatusCode)
 	}
 	res, body = f.do(t, "bob", http.MethodPost, "/v1/codes", map[string]any{"destination": "https://example.com/", "alias": "spring-sale"}, nil)
-	if code, _ := errCode(t, body); res.StatusCode != http.StatusConflict || code != "alias_taken" {
+	if code, _ := errCodeCodes(t, body); res.StatusCode != http.StatusConflict || code != "alias_taken" {
 		t.Fatalf("alias of deleted code: %d %v", res.StatusCode, body)
 	}
 
 	res, body = f.do(t, "alice", http.MethodPost, "/v1/codes", map[string]any{"destination": "https://example.com/", "alias": "healthz"}, nil)
-	if code, details := errCode(t, body); res.StatusCode != http.StatusConflict || code != "alias_reserved" || details["alias"] != "healthz" {
+	if code, details := errCodeCodes(t, body); res.StatusCode != http.StatusConflict || code != "alias_reserved" || details["alias"] != "healthz" {
 		t.Fatalf("reserved alias: %d %v", res.StatusCode, body)
 	}
 
 	for _, bad := range []string{"abcdefghjkmn", "ab", "-lead", "dou--ble", "has space", strings.Repeat("a", 65)} {
 		res, body = f.do(t, "alice", http.MethodPost, "/v1/codes", map[string]any{"destination": "https://example.com/", "alias": bad}, nil)
-		if code, details := errCode(t, body); res.StatusCode != http.StatusBadRequest || code != "alias_invalid" || details["reason"] == nil {
+		if code, details := errCodeCodes(t, body); res.StatusCode != http.StatusBadRequest || code != "alias_invalid" || details["reason"] == nil {
 			t.Fatalf("invalid alias %q: %d %v", bad, res.StatusCode, body)
 		}
 	}
@@ -229,10 +229,10 @@ func TestCodes_DestinationValidation(t *testing.T) {
 	f := newFixture(t, nil, "")
 
 	res, body := f.do(t, "alice", http.MethodPost, "/v1/codes", map[string]any{"destination": "javascript:alert(1)"}, nil)
-	if code, details := errCode(t, body); res.StatusCode != http.StatusBadRequest || code != "unsupported_scheme" || details["scheme"] != "javascript" {
+	if code, details := errCodeCodes(t, body); res.StatusCode != http.StatusBadRequest || code != "unsupported_scheme" || details["scheme"] != "javascript" {
 		t.Fatalf("javascript scheme: %d %v", res.StatusCode, body)
 	}
-	if _, details := errCode(t, body); details["allowed"] == nil {
+	if _, details := errCodeCodes(t, body); details["allowed"] == nil {
 		t.Fatalf("unsupported_scheme must list allowed schemes: %v", body)
 	}
 
@@ -247,7 +247,7 @@ func TestCodes_DestinationValidation(t *testing.T) {
 	}
 	for _, dest := range selfRefs {
 		res, body := f.do(t, "alice", http.MethodPost, "/v1/codes", map[string]any{"destination": dest}, nil)
-		if code, _ := errCode(t, body); res.StatusCode != http.StatusBadRequest || code != "self_referential_destination" {
+		if code, _ := errCodeCodes(t, body); res.StatusCode != http.StatusBadRequest || code != "self_referential_destination" {
 			t.Fatalf("self-ref %q: %d %v", dest, res.StatusCode, body)
 		}
 	}
@@ -255,18 +255,18 @@ func TestCodes_DestinationValidation(t *testing.T) {
 	f.create(t, "alice", map[string]any{"destination": testBaseURL + "/ui/"})
 
 	res, body = f.do(t, "alice", http.MethodPost, "/v1/codes", map[string]any{}, nil)
-	if code, _ := errCode(t, body); res.StatusCode != http.StatusBadRequest || code != "invalid_request" {
+	if code, _ := errCodeCodes(t, body); res.StatusCode != http.StatusBadRequest || code != "invalid_request" {
 		t.Fatalf("missing destination: %d %v", res.StatusCode, body)
 	}
 	res, body = f.do(t, "alice", http.MethodPost, "/v1/codes", map[string]any{"destination": "https://example.com/", "extra": 1}, nil)
-	if code, _ := errCode(t, body); res.StatusCode != http.StatusBadRequest || code != "invalid_request" {
+	if code, _ := errCodeCodes(t, body); res.StatusCode != http.StatusBadRequest || code != "invalid_request" {
 		t.Fatalf("unknown field: %d %v", res.StatusCode, body)
 	}
 
 	// PATCH re-validates (FR-011 on every update).
 	c := f.create(t, "alice", map[string]any{"destination": "https://example.com/ok"})
 	res, body = f.do(t, "alice", http.MethodPatch, "/v1/codes/"+c["id"].(string), map[string]any{"destination": "ftp://example.com/"}, nil)
-	if code, _ := errCode(t, body); res.StatusCode != http.StatusBadRequest || code != "unsupported_scheme" {
+	if code, _ := errCodeCodes(t, body); res.StatusCode != http.StatusBadRequest || code != "unsupported_scheme" {
 		t.Fatalf("PATCH ftp: %d %v", res.StatusCode, body)
 	}
 	_, got := f.do(t, "alice", http.MethodGet, "/v1/codes/"+c["id"].(string), nil, nil)
@@ -331,11 +331,11 @@ func TestCodes_ListPaginationStable(t *testing.T) {
 		t.Fatalf("destination filter: %d %v", res.StatusCode, body)
 	}
 	res, body = f.do(t, "alice", http.MethodGet, "/v1/codes?limit=0", nil, nil)
-	if code, _ := errCode(t, body); res.StatusCode != http.StatusBadRequest || code != "invalid_request" {
+	if code, _ := errCodeCodes(t, body); res.StatusCode != http.StatusBadRequest || code != "invalid_request" {
 		t.Fatalf("limit=0: %d %v", res.StatusCode, body)
 	}
 	res, body = f.do(t, "alice", http.MethodGet, "/v1/codes?cursor=not*base64url", nil, nil)
-	if code, _ := errCode(t, body); res.StatusCode != http.StatusBadRequest || code != "invalid_request" {
+	if code, _ := errCodeCodes(t, body); res.StatusCode != http.StatusBadRequest || code != "invalid_request" {
 		t.Fatalf("bad cursor: %d %v", res.StatusCode, body)
 	}
 }
@@ -350,12 +350,12 @@ func TestCodes_PatchIfMatchAndLifecycle(t *testing.T) {
 		t.Fatalf("PATCH If-Match 1: %d %v", res.StatusCode, body)
 	}
 	res, body = f.do(t, "alice", http.MethodPatch, "/v1/codes/"+id, map[string]any{"destination": "https://example.com/v3"}, map[string]string{"If-Match": `"1"`})
-	code, details := errCode(t, body)
+	code, details := errCodeCodes(t, body)
 	if res.StatusCode != http.StatusConflict || code != "conflict" || details["actual"] != float64(2) || details["expected"] != float64(1) {
 		t.Fatalf("stale If-Match: %d %v", res.StatusCode, body)
 	}
 	res, body = f.do(t, "alice", http.MethodPatch, "/v1/codes/"+id, map[string]any{"destination": "https://example.com/v3"}, map[string]string{"If-Match": `abc`})
-	if code, _ := errCode(t, body); res.StatusCode != http.StatusBadRequest || code != "invalid_request" {
+	if code, _ := errCodeCodes(t, body); res.StatusCode != http.StatusBadRequest || code != "invalid_request" {
 		t.Fatalf("malformed If-Match: %d %v", res.StatusCode, body)
 	}
 	// Omitted If-Match is last-write-wins.
@@ -376,7 +376,7 @@ func TestCodes_PatchIfMatchAndLifecycle(t *testing.T) {
 		t.Fatalf("delete: %d", res.StatusCode)
 	}
 	res, body = f.do(t, "alice", http.MethodPost, "/v1/codes/"+id+"/enable", nil, nil)
-	if code, _ := errCode(t, body); res.StatusCode != http.StatusConflict || code != "conflict" {
+	if code, _ := errCodeCodes(t, body); res.StatusCode != http.StatusConflict || code != "conflict" {
 		t.Fatalf("enable deleted: %d %v", res.StatusCode, body)
 	}
 	res, body = f.do(t, "alice", http.MethodGet, "/v1/codes/"+id, nil, nil)
@@ -405,7 +405,7 @@ func TestCodes_OwnershipIsolation(t *testing.T) {
 	}
 	for _, ck := range checks {
 		res, body := f.do(t, "bob", ck.method, ck.path, ck.body, nil)
-		if code, _ := errCode(t, body); res.StatusCode != http.StatusNotFound || code != "not_found" {
+		if code, _ := errCodeCodes(t, body); res.StatusCode != http.StatusNotFound || code != "not_found" {
 			t.Fatalf("%s %s as bob: %d %v", ck.method, ck.path, res.StatusCode, body)
 		}
 	}
@@ -414,7 +414,7 @@ func TestCodes_OwnershipIsolation(t *testing.T) {
 		t.Fatalf("row mutated by non-owner: %v", got)
 	}
 	res, body := f.do(t, "", http.MethodGet, "/v1/codes/"+id, nil, nil)
-	if code, _ := errCode(t, body); res.StatusCode != http.StatusUnauthorized || code != "unauthorized" {
+	if code, _ := errCodeCodes(t, body); res.StatusCode != http.StatusUnauthorized || code != "unauthorized" {
 		t.Fatalf("anonymous: %d %v", res.StatusCode, body)
 	}
 }

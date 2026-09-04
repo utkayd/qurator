@@ -4,7 +4,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
-	"io"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -143,21 +142,6 @@ func (h *CodesHandler) toResponse(c *domain.Code) codeResponse {
 		CreatedAt: c.CreatedAt.UTC(),
 		UpdatedAt: c.UpdatedAt.UTC(),
 	}
-}
-
-// decodeJSON enforces additionalProperties: false and a bounded body.
-func decodeJSON(w http.ResponseWriter, r *http.Request, v any) bool {
-	dec := json.NewDecoder(io.LimitReader(r.Body, maxBodyBytes))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(v); err != nil {
-		httpapi.WriteError(w, httpapi.CodeInvalidRequest, "The request body is not valid JSON for this operation.", map[string]any{"field": "body"})
-		return false
-	}
-	if dec.More() {
-		httpapi.WriteError(w, httpapi.CodeInvalidRequest, "The request body must contain a single JSON object.", map[string]any{"field": "body"})
-		return false
-	}
-	return true
 }
 
 var hexColorRe = regexp.MustCompile(`^#[0-9A-Fa-f]{6}$`)

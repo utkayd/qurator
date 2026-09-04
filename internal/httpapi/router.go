@@ -2,6 +2,8 @@ package httpapi
 
 import (
 	"net/http"
+
+	"github.com/utkayd/qurator/internal/observability"
 )
 
 // Middleware is the standard wrapping shape.
@@ -30,8 +32,12 @@ type Handlers struct {
 // Constitution Principle IV made structural, and router_test.go asserts it.
 type Options struct {
 	Common []Middleware
-	Auth   Middleware
-	CSRF   Middleware // cookie-session CSRF check; protected group only
+	// PerRoute wraps each registered handler individually, so middleware that reads
+	// r.Pattern (metrics, logging) sees the LEAF pattern ("GET /r/{code}") rather than
+	// the group prefix ("/v1/") that a nested ServeMux reports to outer middleware.
+	PerRoute []Middleware
+	Auth     Middleware
+	CSRF     Middleware // cookie-session CSRF check; protected group only
 }
 
 // Routes is the full route table from contracts/openapi.yaml plus the console.
@@ -96,7 +102,10 @@ func NewRouter(h Handlers, o Options) http.Handler {
 	console := http.NewServeMux()
 
 	for _, rt := range Routes {
-		hd := h.lookup(rt.Handler)
+		hd := withPattern(rt.Pattern, h.lookup(rt.Handler))
+		for i := len(o.PerRoute) - 1; i >= 0; i-- {
+			hd = o.PerRoute[i](hd)
+		}
 		switch rt.Group {
 		case GroupPublic:
 			public.Handle(rt.Pattern, hd)
@@ -172,5 +181,13 @@ func (h Handlers) lookup(name string) http.Handler {
 func NotImplemented() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, CodeNotImplemented, "This endpoint is not implemented yet.", map[string]any{"route": r.Pattern})
+	})
+}
+
+// withPattern stamps the registered pattern into the request context so
+// observability.RoutePattern is authoritative regardless of nested muxes.
+func withPattern(pattern string, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		next.ServeHTTP(w, r.WithContext(observability.WithRoutePattern(r.Context(), pattern)))
 	})
 }

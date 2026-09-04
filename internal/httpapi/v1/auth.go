@@ -1,9 +1,7 @@
 package v1
 
 import (
-	"encoding/json"
 	"errors"
-	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -15,7 +13,6 @@ import (
 )
 
 // maxJSONBody bounds every auth/token request body.
-const maxJSONBody = 64 << 10
 
 // AuthHandler serves POST /v1/auth/signin, POST /v1/auth/signout, GET /v1/auth/me.
 type AuthHandler struct {
@@ -48,22 +45,6 @@ type userJSON struct {
 
 func toUserJSON(u *domain.User) userJSON {
 	return userJSON{ID: u.ID, Email: u.Email, IsAdmin: u.IsAdmin, Source: string(u.Source), CreatedAt: u.CreatedAt.UTC(), LastLoginAt: u.LastLoginAt}
-}
-
-// decodeJSON reads a bounded, strict JSON body. It writes the 400 itself and returns
-// false when the body is unusable.
-func decodeJSON(w http.ResponseWriter, r *http.Request, v any) bool {
-	dec := json.NewDecoder(io.LimitReader(r.Body, maxJSONBody))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(v); err != nil {
-		httpapi.WriteError(w, httpapi.CodeInvalidRequest, "The request body is not valid JSON for this endpoint.", nil)
-		return false
-	}
-	if dec.More() {
-		httpapi.WriteError(w, httpapi.CodeInvalidRequest, "The request body must contain a single JSON object.", nil)
-		return false
-	}
-	return true
 }
 
 func (h *AuthHandler) signin(w http.ResponseWriter, r *http.Request) {

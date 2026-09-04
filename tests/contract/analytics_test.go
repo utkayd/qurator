@@ -97,7 +97,7 @@ func get(t *testing.T, h http.Handler, user, query string) (*httptest.ResponseRe
 	return rr, rr.Body.Bytes()
 }
 
-func decode(t *testing.T, rr *httptest.ResponseRecorder, raw []byte) analyticsBody {
+func decodeAnalytics(t *testing.T, rr *httptest.ResponseRecorder, raw []byte) analyticsBody {
 	t.Helper()
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status %d: %s", rr.Code, raw)
@@ -143,7 +143,7 @@ func TestAnalyticsResponseShape(t *testing.T) {
 	h, _, base := analyticsFixture(t)
 	from, to := base.Format(time.RFC3339), base.Add(14*24*time.Hour).Format(time.RFC3339)
 	rr, raw := get(t, h, ownerID, "?from="+from+"&to="+to)
-	b := decode(t, rr, raw)
+	b := decodeAnalytics(t, rr, raw)
 
 	// CodeAnalytics: additionalProperties: false, required [code_id, from, to, total, series, breakdowns].
 	var top map[string]json.RawMessage
@@ -185,20 +185,20 @@ func TestAnalyticsTimeRangeFiltering(t *testing.T) {
 	h, _, base := analyticsFixture(t)
 	// Only day 0, hour 9 → [09:00, 10:00): 3 scans.
 	rr, raw := get(t, h, ownerID, "?from="+base.Add(9*time.Hour).Format(time.RFC3339)+"&to="+base.Add(10*time.Hour).Format(time.RFC3339)+"&bucket=hour")
-	b := decode(t, rr, raw)
+	b := decodeAnalytics(t, rr, raw)
 	if b.Total != 3 {
 		t.Fatalf("hour 9 total=%d, want 3", b.Total)
 	}
 	assertSums(t, b)
 	// Days 0..1 → 5 scans; day 2's scans are excluded by the half-open upper bound.
 	rr, raw = get(t, h, ownerID, "?from="+base.Format(time.RFC3339)+"&to="+base.Add(2*24*time.Hour).Format(time.RFC3339))
-	b = decode(t, rr, raw)
+	b = decodeAnalytics(t, rr, raw)
 	if b.Total != 5 {
 		t.Fatalf("days 0-1 total=%d, want 5", b.Total)
 	}
 	// Empty range → zero total, empty (not null) series, four empty breakdowns.
 	rr, raw = get(t, h, ownerID, "?from=2020-01-01T00:00:00Z&to=2020-02-01T00:00:00Z")
-	b = decode(t, rr, raw)
+	b = decodeAnalytics(t, rr, raw)
 	if b.Total != 0 || b.Series == nil || len(b.Series) != 0 {
 		t.Fatalf("empty range: %s", raw)
 	}
@@ -228,7 +228,7 @@ func TestAnalyticsBuckets(t *testing.T) {
 			q += "&bucket=" + tc.bucket
 		}
 		rr, raw := get(t, h, ownerID, q)
-		b := decode(t, rr, raw)
+		b := decodeAnalytics(t, rr, raw)
 		if len(b.Series) != tc.points {
 			t.Fatalf("bucket=%q: %d series points, want %d: %s", tc.bucket, len(b.Series), tc.points, raw)
 		}
@@ -238,7 +238,7 @@ func TestAnalyticsBuckets(t *testing.T) {
 		assertSums(t, b)
 	}
 	rr, raw := get(t, h, ownerID, "?from="+from+"&to="+to+"&bucket=week")
-	if b := decode(t, rr, raw); b.Series[0].Count != 9 || b.Series[1].Count != 1 {
+	if b := decodeAnalytics(t, rr, raw); b.Series[0].Count != 9 || b.Series[1].Count != 1 {
 		t.Fatalf("week counts: %+v", b.Series)
 	}
 }
@@ -246,7 +246,7 @@ func TestAnalyticsBuckets(t *testing.T) {
 func TestAnalyticsDefaultsToLast30Days(t *testing.T) {
 	h, _, base := analyticsFixture(t)
 	rr, raw := get(t, h, ownerID, "")
-	b := decode(t, rr, raw)
+	b := decodeAnalytics(t, rr, raw)
 	if b.Total != 10 {
 		t.Fatalf("default range should cover the fixture (now = base+20d): total=%d", b.Total)
 	}

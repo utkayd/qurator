@@ -143,10 +143,7 @@ func (m *Metrics) Middleware(next http.Handler) http.Handler {
 		next.ServeHTTP(rec, r)
 		duration := time.Since(start).Seconds()
 
-		route := r.Pattern
-		if route == "" {
-			route = "unmatched"
-		}
+		route := RoutePattern(r)
 		status := rec.status
 		if status == 0 {
 			status = http.StatusOK
