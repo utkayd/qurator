@@ -206,20 +206,20 @@ Scenario 4).
 
 ### Tests for User Story 3 (REQUIRED for contract surfaces — see Principle VII) ⚠️
 
-- [ ] T058 [P] [US3] (Stream C) Write `internal/auth/password_test.go`: Argon2id PHC round-trip, wrong password rejected, parameters (t=3, m=64MiB, p=4) encoded in the PHC string, and a timing test that verification of a wrong password is not measurably faster than a right one
-- [ ] T059 [P] [US3] (Stream C) Write `internal/auth/token_test.go`: `qur_` prefix + 43-char base64url, SHA-256 stored hash, `subtle.ConstantTimeCompare` used (assert via a counting hash spy), revoked → `ErrTokenRevoked` within one cache TTL, `token_version` bump invalidates a session JWT
-- [ ] T060 [P] [US3] (Stream C) Write `internal/auth/forwardauth_test.go`: header from peer outside trusted CIDRs → anonymous; from inside → identity; `X-Forwarded-For` spoofing a trusted IP from an untrusted peer → anonymous; two `X-Forwarded-Email` headers → `401`; comma-joined value → `401`; mode disabled → header ignored entirely
-- [ ] T061 [P] [US3] (Stream C) Write `tests/contract/auth_test.go` against OpenAPI: signin sets `HttpOnly; Secure; SameSite=Strict; Path=/` and no `Domain`; `/v1/auth/me` works with cookie AND with bearer; mutating request with cookie but without `X-Qurator-Requested-With` → `403`; same request with bearer and no CSRF header → `200`; `POST /v1/tokens` returns `secret` once and `GET /v1/tokens` never includes it; `DELETE /v1/admin/aliases/{alias}` as non-admin → `403`
+- [x] T058 [P] [US3] (Stream C) Write `internal/auth/password_test.go`: Argon2id PHC round-trip, wrong password rejected, parameters (t=3, m=64MiB, p=4) encoded in the PHC string, and a timing test that verification of a wrong password is not measurably faster than a right one
+- [x] T059 [P] [US3] (Stream C) Write `internal/auth/token_test.go`: `qur_` prefix + 43-char base64url, SHA-256 stored hash, `subtle.ConstantTimeCompare` used (assert via a counting hash spy), revoked → `ErrTokenRevoked` within one cache TTL, `token_version` bump invalidates a session JWT
+- [x] T060 [P] [US3] (Stream C) Write `internal/auth/forwardauth_test.go`: header from peer outside trusted CIDRs → anonymous; from inside → identity; `X-Forwarded-For` spoofing a trusted IP from an untrusted peer → anonymous; two `X-Forwarded-Email` headers → `401`; comma-joined value → `401`; mode disabled → header ignored entirely
+- [x] T061 [P] [US3] (Stream C) Write `tests/contract/auth_test.go` against OpenAPI: signin sets `HttpOnly; Secure; SameSite=Strict; Path=/` and no `Domain`; `/v1/auth/me` works with cookie AND with bearer; mutating request with cookie but without `X-Qurator-Requested-With` → `403`; same request with bearer and no CSRF header → `200`; `POST /v1/tokens` returns `secret` once and `GET /v1/tokens` never includes it; `DELETE /v1/admin/aliases/{alias}` as non-admin → `403`
 
 ### Implementation for User Story 3
 
-- [ ] T062 [US3] (Stream C) Create `internal/auth/password.go` — Argon2id via `x/crypto/argon2.IDKey` with PHC encode/verify (t=3, m=65536, p=4, keyLen=32, 16-byte salt)
-- [ ] T063 [P] [US3] (Stream C) Create `internal/auth/apitoken.go` — generate `qur_<base64url(32 bytes)>`, store SHA-256 (optionally HMAC with a configured pepper), verify with constant-time compare, 30s positive TTL cache keyed by token ID, lazy `TouchTokenLastUsed` at most once per minute
-- [ ] T064 [P] [US3] (Stream C) Create `internal/auth/jwt.go` — HS256 via `golang-jwt/jwt/v5` with claims `sub`, `jti`, `tv` (token_version), `exp` (12h), `iat`; verify checks `tv` against `users.token_version` through the same TTL cache
-- [ ] T065 [US3] (Stream C) Create `internal/auth/middleware.go` — ONE `Authenticate` middleware: read `Authorization: Bearer` first, else the session cookie, else (if forward-auth enabled) the identity header ONLY after `net.SplitHostPort(r.RemoteAddr)` is inside a trusted CIDR; refuse on duplicate/comma-joined identity headers; put `Identity{UserID, IsAdmin, Method}` in context; satisfies the `auth.Middleware` interface the router expects
-- [ ] T066 [US3] (Stream C) Create `internal/auth/bootstrap.go` — on start, if `CountUsers()==0` and bootstrap email/password are configured, create the admin; never on a marker file, never when users exist (FR-032)
-- [ ] T067 [US3] (Stream C) Implement `internal/httpapi/v1/auth.go` (signin/signout/me), `internal/httpapi/v1/tokens.go` (create/list/revoke), `internal/httpapi/v1/admin.go` (`releaseAlias`, `403` unless `IsAdmin`) per OpenAPI
-- [ ] T068 [US3] (Stream C) Run T058–T061 green, `make lint`; commit on `stream/c-auth`
+- [x] T062 [US3] (Stream C) Create `internal/auth/password.go` — Argon2id via `x/crypto/argon2.IDKey` with PHC encode/verify (t=3, m=65536, p=4, keyLen=32, 16-byte salt)
+- [x] T063 [P] [US3] (Stream C) Create `internal/auth/apitoken.go` — generate `qur_<base64url(32 bytes)>`, store SHA-256 (optionally HMAC with a configured pepper), verify with constant-time compare, 30s positive TTL cache keyed by token ID, lazy `TouchTokenLastUsed` at most once per minute
+- [x] T064 [P] [US3] (Stream C) Create `internal/auth/jwt.go` — HS256 via `golang-jwt/jwt/v5` with claims `sub`, `jti`, `tv` (token_version), `exp` (12h), `iat`; verify checks `tv` against `users.token_version` through the same TTL cache
+- [x] T065 [US3] (Stream C) Create `internal/auth/middleware.go` — ONE `Authenticate` middleware: read `Authorization: Bearer` first, else the session cookie, else (if forward-auth enabled) the identity header ONLY after `net.SplitHostPort(r.RemoteAddr)` is inside a trusted CIDR; refuse on duplicate/comma-joined identity headers; put `Identity{UserID, IsAdmin, Method}` in context; satisfies the `auth.Middleware` interface the router expects
+- [x] T066 [US3] (Stream C) Create `internal/auth/bootstrap.go` — on start, if `CountUsers()==0` and bootstrap email/password are configured, create the admin; never on a marker file, never when users exist (FR-032)
+- [x] T067 [US3] (Stream C) Implement `internal/httpapi/v1/auth.go` (signin/signout/me), `internal/httpapi/v1/tokens.go` (create/list/revoke), `internal/httpapi/v1/admin.go` (`releaseAlias`, `403` unless `IsAdmin`) per OpenAPI
+- [x] T068 [US3] (Stream C) Run T058–T061 green, `make lint`; commit on `stream/c-auth`
 
 **Checkpoint**: The instance can be safely exposed. No release ships before this merges.
 
