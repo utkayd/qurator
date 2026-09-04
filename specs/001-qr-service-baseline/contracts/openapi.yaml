@@ -301,7 +301,7 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '413':
           $ref: '#/components/responses/ContentTooLarge'
-        '422':
+        '400':
           $ref: '#/components/responses/UnprocessableStyling'
         '429':
           $ref: '#/components/responses/RateLimited'
@@ -350,7 +350,7 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '413':
           $ref: '#/components/responses/ContentTooLarge'
-        '422':
+        '400':
           $ref: '#/components/responses/UnprocessableStyling'
         '429':
           $ref: '#/components/responses/RateLimited'
@@ -472,7 +472,7 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '409':
           $ref: '#/components/responses/Conflict'
-        '422':
+        '400':
           $ref: '#/components/responses/UnprocessableStyling'
         '5XX':
           description: Unexpected server error.
@@ -1184,7 +1184,7 @@ components:
                   code: contrast_too_low
                   message: "Foreground/background contrast is 1.9:1; at least 3:1 is required."
                   details:
-                    contrast_ratio: 1.9
+                    ratio: 1.9
                     minimum_required: 3.0
             logo_too_large:
               value:
@@ -1193,7 +1193,7 @@ components:
                   message: "Logo covers 30% of the symbol; the maximum at error correction level Q is 20%."
                   details:
                     ec_level: Q
-                    max_logo_area_pct: 20
+                    max_scale: 20
                     requested_logo_area_pct: 30
             dimensions_exceeded:
               value:
@@ -1426,6 +1426,13 @@ components:
         the cap for every level up to H is rejected with `logo_too_large` (FR-028).
       required: [image_base64]
       properties:
+        auto_raise:
+          type: boolean
+          default: true
+          description: >-
+            Raise the error-correction level automatically when the logo exceeds the
+            requested level's recoverable budget (FR-027). When false, an oversized logo
+            is rejected with `logo_too_large` instead.
         image_base64:
           type: string
           contentEncoding: base64

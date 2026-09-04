@@ -339,7 +339,7 @@ architectures.
 
 ## Phase 10: Merge and cross-cutting validation
 
-- [ ] T104 (Stream 0) Merge streams in dependency order: B → C → D → A → F → E (B first because C, D, E build on real drivers; E last because it exercises everything). Resolve any contention notes from stream commit messages in `cmd/qurator/main.go` and `internal/httpapi/router.go`; replace every remaining `notImplemented` stub
+- [x] T104 (Stream 0) Merge streams in dependency order: B → C → D → A → F → E (B first because C, D, E build on real drivers; E last because it exercises everything). Resolve any contention notes from stream commit messages in `cmd/qurator/main.go` and `internal/httpapi/router.go`; replace every remaining `notImplemented` stub
 - [ ] T105 (Stream 0) Write `tests/integration/backends_test.go` — run the full `tests/contract` suite twice via a matrix: `sqlite+fsblob` and `postgres+s3blob` (skipping the latter without env), asserting identical responses (SC-010)
 - [ ] T106 (Stream 0) Write `tests/integration/privacy_test.go` — after 1,000 scans, dump every table on both backends and assert no value matches an IPv4/IPv6 pattern and no column name contains `ip`, `addr`, `geo`, `country` (SC-012)
 - [ ] T107 (Stream 0) Write `tests/integration/stall_test.go` — swap in a `Store` whose `InsertScanBatch` blocks forever; run 10,000 redirects with `hey`-equivalent in-process load; assert p99 < 50ms and `qurator_scan_events_dropped_total` > 0 (SC-005, Principle IV)
