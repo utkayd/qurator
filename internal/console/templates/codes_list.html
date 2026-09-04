@@ -1,0 +1,32 @@
+{{define "content"}}
+<h1>Your codes</h1>
+<p><a href="/ui/codes/new">Create a new code</a></p>
+{{if not .Items}}
+<p class="help">No codes yet.</p>
+{{else}}
+<table>
+  <caption class="help">Dynamic QR codes you own</caption>
+  <thead>
+    <tr>
+      <th scope="col">Short code</th>
+      <th scope="col">Destination</th>
+      <th scope="col">State</th>
+      <th scope="col">Created</th>
+    </tr>
+  </thead>
+  <tbody>
+    {{range .Items}}
+    <tr>
+      <td><a href="/ui/codes/{{.ID}}">{{.ShortCode}}</a></td>
+      <td>{{.Destination}}</td>
+      <td><span class="badge {{.State}}">{{.State}}</span></td>
+      <td>{{.CreatedAt.Format "2006-01-02"}}</td>
+    </tr>
+    {{end}}
+  </tbody>
+</table>
+{{end}}
+{{if .NextCursor}}
+<p><a href="/ui/?cursor={{.NextCursor}}">Next page</a></p>
+{{end}}
+{{end}}

@@ -1,0 +1,37 @@
+{{define "content"}}
+<h1>{{.Code.ShortCode}}</h1>
+{{if .Error}}<p class="error-banner" role="alert">{{.Error}}</p>{{end}}
+
+<div class="card">
+  <p><span class="badge {{.Code.State}}">{{.Code.State}}</span></p>
+  <p><a href="{{.ImageURL}}">Download image</a></p>
+  <p class="help">Scan address (encoded in the image, never changes): {{.Code.ScanURL}}</p>
+
+  <form class="stack" hx-patch="/ui/codes/{{.Code.ID}}" hx-target="#destination-status" hx-swap="innerHTML">
+    <input type="hidden" data-if-match="{{.Code.Version}}">
+    <div class="field">
+      <label for="destination">Destination</label>
+      <input type="url" id="destination" name="destination" required value="{{.Code.Destination}}">
+    </div>
+    <button type="submit">Save destination</button>
+    <div id="destination-status" role="status" aria-live="polite"></div>
+  </form>
+
+  <form hx-delete="/ui/codes/{{.Code.ID}}" hx-target="body" hx-swap="outerHTML">
+    <button type="submit" class="danger"
+            data-confirm-message="Deleting this code cannot be undone. Any printed copies of this QR image will stop working immediately.">
+      Delete this code
+    </button>
+  </form>
+</div>
+
+<div class="card">
+  <h2>Analytics</h2>
+  {{if .Analytics}}
+  <p>{{.Analytics.Total}} scans from {{.From}} to {{.To}}</p>
+  {{trendChart .Analytics.Series}}
+  {{else}}
+  <p class="help">No analytics available yet.</p>
+  {{end}}
+</div>
+{{end}}

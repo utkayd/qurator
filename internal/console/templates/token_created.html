@@ -1,0 +1,15 @@
+{{define "content"}}
+<h1>Token created</h1>
+<p class="error-banner" role="alert">
+  Copy this secret now. It will never be shown again — not on this page after a reload,
+  not from the token list, not from any export.
+</p>
+
+<div class="card" data-secret-container>
+  <p><strong>{{.Name}}</strong></p>
+  <p class="secret-box" data-secret-value>{{.Secret}}</p>
+  <button type="button" data-copy-secret>Copy to clipboard</button>
+</div>
+
+<p><a href="/ui/tokens">Back to tokens</a></p>
+{{end}}

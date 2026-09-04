@@ -1,0 +1,15 @@
+{{define "content"}}
+<h1>Sign in</h1>
+{{if .Error}}<p class="error-banner" role="alert">{{.Error}}</p>{{end}}
+<form class="stack" method="post" action="/ui/signin">
+  <div class="field">
+    <label for="email">Email</label>
+    <input type="email" id="email" name="email" autocomplete="username" required value="{{.Email}}">
+  </div>
+  <div class="field">
+    <label for="password">Password</label>
+    <input type="password" id="password" name="password" autocomplete="current-password" required>
+  </div>
+  <button type="submit" class="primary">Sign in</button>
+</form>
+{{end}}
