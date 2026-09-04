@@ -138,19 +138,19 @@ called (quickstart Scenario 2).
 
 ### Tests for User Story 1 (REQUIRED for contract surfaces — see Principle VII) ⚠️
 
-- [ ] T032 [P] [US1] (Stream A) Create `tools/qrdecode/main.go` — a CLI wrapping `makiuchi-d/gozxing` that decodes a PNG (and an SVG, via `oksvg`+`rasterx` rasterisation) to stdout, reading bytes via `ResultMetadataType_BYTE_SEGMENTS`; used by quickstart and by the tests below
-- [ ] T033 [P] [US1] (Stream A) Write `internal/qr/encode_test.go` round-trip table: ASCII, emoji, RTL Arabic, a 2,953-byte payload at EC-L, a 1,273-byte payload at EC-H, raw `[]byte{0x00, 0xFF, 0x80}` — each rendered to PNG and SVG and decoded with gozxing, asserting exact equality; plus a determinism test (`bytes.Equal` across two renders) and an over-capacity test expecting `ErrContentTooLarge`
-- [ ] T034 [P] [US1] (Stream A) Write `internal/qr/encode_test.go::TestECLevelHonoured` asserting a request for EC-L yields a symbol gozxing reports as EC-L (the `boostEcl` trap in research §1)
-- [ ] T035 [P] [US1] (Stream A) Write `tests/contract/qr_test.go` against the OpenAPI contract for `/v1/qr`: PNG and SVG content types, `413 content_too_large`, `401` without credential by default, `200` when `ephemeral.public=true`, `429 rate_limited` after the configured burst, and byte-identical responses for identical params
+- [x] T032 [P] [US1] (Stream A) Create `tools/qrdecode/main.go` — a CLI wrapping `makiuchi-d/gozxing` that decodes a PNG (and an SVG, via `oksvg`+`rasterx` rasterisation) to stdout, reading bytes via `ResultMetadataType_BYTE_SEGMENTS`; used by quickstart and by the tests below
+- [x] T033 [P] [US1] (Stream A) Write `internal/qr/encode_test.go` round-trip table: ASCII, emoji, RTL Arabic, a 2,953-byte payload at EC-L, a 1,273-byte payload at EC-H, raw `[]byte{0x00, 0xFF, 0x80}` — each rendered to PNG and SVG and decoded with gozxing, asserting exact equality; plus a determinism test (`bytes.Equal` across two renders) and an over-capacity test expecting `ErrContentTooLarge`
+- [x] T034 [P] [US1] (Stream A) Write `internal/qr/encode_test.go::TestECLevelHonoured` asserting a request for EC-L yields a symbol gozxing reports as EC-L (the `boostEcl` trap in research §1)
+- [x] T035 [P] [US1] (Stream A) Write `tests/contract/qr_test.go` against the OpenAPI contract for `/v1/qr`: PNG and SVG content types, `413 content_too_large`, `401` without credential by default, `200` when `ephemeral.public=true`, `429 rate_limited` after the configured burst, and byte-identical responses for identical params
 
 ### Implementation for User Story 1
 
-- [ ] T036 [US1] (Stream A) Create `internal/qr/encode.go` wrapping `piglig/go-qr` `EncodeSegments(..., boostEcl=false)`, exposing `Encode(content []byte, ec ECLevel) (*Symbol, error)` where `Symbol` wraps the module grid; enforce the per-level byte capacity table; return `ErrContentTooLarge` with the limit in the error
-- [ ] T037 [US1] (Stream A) Create `internal/qr/render_png.go` and `internal/qr/render_svg.go` rendering square modules only (shapes arrive in US5) from `Symbol`, honouring margin, size, fg/bg colour; PNG via `image/png` with a fixed encoder config for determinism; SVG via a `strings.Builder` with no timestamps or random IDs
-- [ ] T038 [US1] (Stream A) Create `internal/qr/policy.go` with `Bounds{MaxPx, MaxDuration, MaxPayload}` applied to every render (`context.WithTimeout` around rendering → `ErrRenderTimeout`; dimension check → `ErrDimensionsExceeded`)
-- [ ] T039 [US1] (Stream A) Create `internal/qr/bench_test.go` — `BenchmarkRenderPNG` and `BenchmarkRenderSVG` for a 200-byte payload at 512px; this is the benchmark Principle III requires and Stream F's `bench.yml` gates on
-- [ ] T040 [US1] (Stream A) Implement `internal/httpapi/v1/qr.go`: constructor `NewQRHandler(renderer *qr.Renderer, cfg EphemeralConfig)` — signature MUST NOT accept a `Store` or `BlobStore` (Principle III made structural); parse params per OpenAPI `StylingRequest`; when `cfg.Public` is false require auth (via the injected middleware's identity in context) else apply the rate limiter; set `Content-Type`, `Cache-Control: public, max-age=31536000, immutable`, and a content-hash `ETag`
-- [ ] T041 [US1] (Stream A) Run T033–T035 green, `go test -race ./internal/qr/... ./tests/contract/...`, `make lint`; commit on `stream/a-qr`
+- [x] T036 [US1] (Stream A) Create `internal/qr/encode.go` wrapping `piglig/go-qr` `EncodeSegments(..., boostEcl=false)`, exposing `Encode(content []byte, ec ECLevel) (*Symbol, error)` where `Symbol` wraps the module grid; enforce the per-level byte capacity table; return `ErrContentTooLarge` with the limit in the error
+- [x] T037 [US1] (Stream A) Create `internal/qr/render_png.go` and `internal/qr/render_svg.go` rendering square modules only (shapes arrive in US5) from `Symbol`, honouring margin, size, fg/bg colour; PNG via `image/png` with a fixed encoder config for determinism; SVG via a `strings.Builder` with no timestamps or random IDs
+- [x] T038 [US1] (Stream A) Create `internal/qr/policy.go` with `Bounds{MaxPx, MaxDuration, MaxPayload}` applied to every render (`context.WithTimeout` around rendering → `ErrRenderTimeout`; dimension check → `ErrDimensionsExceeded`)
+- [x] T039 [US1] (Stream A) Create `internal/qr/bench_test.go` — `BenchmarkRenderPNG` and `BenchmarkRenderSVG` for a 200-byte payload at 512px; this is the benchmark Principle III requires and Stream F's `bench.yml` gates on
+- [x] T040 [US1] (Stream A) Implement `internal/httpapi/v1/qr.go`: constructor `NewQRHandler(renderer *qr.Renderer, cfg EphemeralConfig)` — signature MUST NOT accept a `Store` or `BlobStore` (Principle III made structural); parse params per OpenAPI `StylingRequest`; when `cfg.Public` is false require auth (via the injected middleware's identity in context) else apply the rate limiter; set `Content-Type`, `Cache-Control: public, max-age=31536000, immutable`, and a content-hash `ETag`
+- [x] T041 [US1] (Stream A) Run T033–T035 green, `go test -race ./internal/qr/... ./tests/contract/...`, `make lint`; commit on `stream/a-qr`
 
 **Checkpoint**: US1 is a shippable ephemeral QR service on its own.
 
@@ -267,18 +267,18 @@ and oversized logo rejected (quickstart Scenario 6).
 
 ### Tests for User Story 5 (REQUIRED for contract surfaces — see Principle VII) ⚠️
 
-- [ ] T079 [P] [US5] (Stream A) Write `internal/qr/shape_test.go` — for each of `square`/`dot`/`rounded` at 3 sizes and 4 EC levels, render PNG and SVG, decode both with gozxing, assert equality; assert PNG and SVG derive from the same `Geometry` (a spy counts one geometry computation per render pair)
-- [ ] T080 [P] [US5] (Stream A) Write `internal/qr/logo_test.go` — logo at 4% on EC-L decodes; 6% on EC-L → `ErrLogoTooLarge` with `max_scale=0.05`; 20% on EC-L with `auto_raise=true` → effective level H and decodes; logo present in output (pixel sample)
-- [ ] T081 [P] [US5] (Stream A) Write `internal/qr/contrast_test.go` — `#FEFEFE` on `#FFFFFF` → `ErrContrastTooLow` with the ratio in details; `#101828` on `#FFFFFF` passes; ratio computed by WCAG relative luminance (table of known pairs)
+- [x] T079 [P] [US5] (Stream A) Write `internal/qr/shape_test.go` — for each of `square`/`dot`/`rounded` at 3 sizes and 4 EC levels, render PNG and SVG, decode both with gozxing, assert equality; assert PNG and SVG derive from the same `Geometry` (a spy counts one geometry computation per render pair)
+- [x] T080 [P] [US5] (Stream A) Write `internal/qr/logo_test.go` — logo at 4% on EC-L decodes; 6% on EC-L → `ErrLogoTooLarge` with `max_scale=0.05`; 20% on EC-L with `auto_raise=true` → effective level H and decodes; logo present in output (pixel sample)
+- [x] T081 [P] [US5] (Stream A) Write `internal/qr/contrast_test.go` — `#FEFEFE` on `#FFFFFF` → `ErrContrastTooLow` with the ratio in details; `#101828` on `#FFFFFF` passes; ratio computed by WCAG relative luminance (table of known pairs)
 
 ### Implementation for User Story 5
 
-- [ ] T082 [US5] (Stream A) Create `internal/qr/shape.go` — `Geometry` computed once from `Symbol`: for `square` unit rects; `dot` circles at 0.9 module diameter; `rounded` rects with corner radius chosen by neighbour adjacency so runs join (finder patterns always square for scanner reliability)
-- [ ] T083 [US5] (Stream A) Refactor `render_png.go` and `render_svg.go` to consume `Geometry` instead of the raw grid (PNG via `golang.org/x/image/vector` or `image/draw` with anti-aliasing; SVG emitting `<rect>`/`<circle>`/`<path>` elements)
-- [ ] T084 [US5] (Stream A) Create `internal/qr/logo.go` — decode PNG/JPEG logo, cap at per-level budget (L 5%, M 12%, Q 20%, H 25%), automatic EC raising when `AutoRaise` and the requested level's budget is exceeded (recording `ECLevelEffective`), composite centred with a 1-module bg-coloured pad
-- [ ] T085 [US5] (Stream A) Extend `internal/qr/policy.go` with `ContrastRatio(fg, bg)` (WCAG), hard floor 3:1, configurable default gate 4.5:1 → `ErrContrastTooLow`
-- [ ] T086 [US5] (Stream A) Extend `internal/httpapi/v1/qr.go` to accept the full `StylingRequest` (multipart or base64 logo) and map every `qr` error to its `contracts/errors.md` code with `details`
-- [ ] T087 [US5] (Stream A) Run T079–T081 green, benchmarks not regressed vs T039 baseline, `make lint`; commit on `stream/a-qr`
+- [x] T082 [US5] (Stream A) Create `internal/qr/shape.go` — `Geometry` computed once from `Symbol`: for `square` unit rects; `dot` circles at 0.9 module diameter; `rounded` rects with corner radius chosen by neighbour adjacency so runs join (finder patterns always square for scanner reliability)
+- [x] T083 [US5] (Stream A) Refactor `render_png.go` and `render_svg.go` to consume `Geometry` instead of the raw grid (PNG via `golang.org/x/image/vector` or `image/draw` with anti-aliasing; SVG emitting `<rect>`/`<circle>`/`<path>` elements)
+- [x] T084 [US5] (Stream A) Create `internal/qr/logo.go` — decode PNG/JPEG logo, cap at per-level budget (L 5%, M 12%, Q 20%, H 25%), automatic EC raising when `AutoRaise` and the requested level's budget is exceeded (recording `ECLevelEffective`), composite centred with a 1-module bg-coloured pad
+- [x] T085 [US5] (Stream A) Extend `internal/qr/policy.go` with `ContrastRatio(fg, bg)` (WCAG), hard floor 3:1, configurable default gate 4.5:1 → `ErrContrastTooLow`
+- [x] T086 [US5] (Stream A) Extend `internal/httpapi/v1/qr.go` to accept the full `StylingRequest` (multipart or base64 logo) and map every `qr` error to its `contracts/errors.md` code with `details`
+- [x] T087 [US5] (Stream A) Run T079–T081 green, benchmarks not regressed vs T039 baseline, `make lint`; commit on `stream/a-qr`
 
 ---
 
