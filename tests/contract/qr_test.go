@@ -3,7 +3,11 @@ package contract
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
+	"image"
+	"image/png"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -261,5 +265,132 @@ func TestQR_UnknownJSONFieldRejected(t *testing.T) {
 	rec := post(h, map[string]any{"content": "x", "bogus": true})
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", rec.Code)
+	}
+}
+
+// ---- US5 styling ------------------------------------------------------------------------
+
+func solidLogoPNG(t *testing.T) []byte {
+	t.Helper()
+	img := image.NewNRGBA(image.Rect(0, 0, 32, 32))
+	for i := 0; i < len(img.Pix); i += 4 {
+		img.Pix[i], img.Pix[i+1], img.Pix[i+2], img.Pix[i+3] = 0xE0, 0x40, 0x20, 0xFF
+	}
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+func TestQR_StylingShapesDecode(t *testing.T) {
+	h := newHandler(t, false, true, nil)
+	for _, shape := range []string{"square", "dot", "rounded"} {
+		rec := post(h, map[string]any{"content": "styled", "format": "png", "styling": map[string]any{
+			"fg_color": "#101828", "bg_color": "#FFFFFF", "module_shape": shape, "margin_modules": 4, "size_px": 400, "ec_level": "Q",
+		}})
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s: status = %d, body = %s", shape, rec.Code, rec.Body.String())
+		}
+		res, err := decode.PNG(rec.Body.Bytes())
+		if err != nil {
+			t.Fatalf("%s: %v", shape, err)
+		}
+		if string(res.Bytes) != "styled" {
+			t.Errorf("%s: decoded %q", shape, res.Bytes)
+		}
+	}
+}
+
+func TestQR_ContrastTooLow(t *testing.T) {
+	h := newHandler(t, false, true, nil)
+	rec := get(h, url.Values{"content": {"x"}, "fg_color": {"#FEFEFE"}, "bg_color": {"#FFFFFF"}})
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if code := errorCode(t, rec); code != "contrast_too_low" {
+		t.Errorf("code = %q", code)
+	}
+	var body httpapi.ErrorBody
+	_ = json.Unmarshal(rec.Body.Bytes(), &body)
+	if body.Error.Details["ratio"] == nil || body.Error.Details["minimum"] == nil {
+		t.Errorf("details = %v, want ratio and minimum", body.Error.Details)
+	}
+}
+
+func TestQR_LogoJSON(t *testing.T) {
+	h := newHandler(t, false, true, nil)
+	logo := base64.StdEncoding.EncodeToString(solidLogoPNG(t))
+
+	// Over budget without auto-raise → logo_too_large with the level's cap.
+	rec := post(h, map[string]any{"content": "logo", "styling": map[string]any{
+		"ec_level": "L", "logo": map[string]any{"image_base64": logo, "scale": 0.06, "auto_raise": false},
+	}})
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if code := errorCode(t, rec); code != "logo_too_large" {
+		t.Errorf("code = %q", code)
+	}
+	var body httpapi.ErrorBody
+	_ = json.Unmarshal(rec.Body.Bytes(), &body)
+	if body.Error.Details["max_scale"] != 0.05 || body.Error.Details["ec_level"] != "L" || body.Error.Details["scale"] != 0.06 {
+		t.Errorf("details = %v", body.Error.Details)
+	}
+
+	// Same logo with auto-raise (the default) renders and decodes.
+	rec = post(h, map[string]any{"content": "logo", "format": "png", "styling": map[string]any{
+		"ec_level": "L", "size_px": 512, "logo": map[string]any{"image_base64": logo, "scale": 0.06},
+	}})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	res, err := decode.PNG(rec.Body.Bytes())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(res.Bytes) != "logo" || res.ECLevel == "L" {
+		t.Errorf("decoded %q at EC %s; want \"logo\" at a raised level", res.Bytes, res.ECLevel)
+	}
+
+	// Garbage logo bytes → invalid_request naming the field.
+	rec = post(h, map[string]any{"content": "logo", "styling": map[string]any{
+		"logo": map[string]any{"image_base64": base64.StdEncoding.EncodeToString([]byte("nope"))},
+	}})
+	if rec.Code != http.StatusBadRequest || errorCode(t, rec) != "invalid_request" {
+		t.Errorf("garbage logo: status = %d body = %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestQR_LogoMultipart(t *testing.T) {
+	h := newHandler(t, false, true, nil)
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	_ = mw.WriteField("content", "multipart logo")
+	_ = mw.WriteField("format", "svg")
+	_ = mw.WriteField("ec_level", "H")
+	_ = mw.WriteField("logo_scale", "0.2")
+	fw, _ := mw.CreateFormFile("logo", "logo.png")
+	_, _ = fw.Write(solidLogoPNG(t))
+	_ = mw.Close()
+	req := httptest.NewRequest(http.MethodPost, "/v1/qr", &buf)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "image/svg+xml" {
+		t.Errorf("Content-Type = %q", ct)
+	}
+	if !strings.Contains(rec.Body.String(), "<image") {
+		t.Error("svg must embed the logo")
+	}
+	res, err := decode.SVG(rec.Body.Bytes(), 512)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(res.Bytes) != "multipart logo" || res.ECLevel != "H" {
+		t.Errorf("decoded %q at %s", res.Bytes, res.ECLevel)
 	}
 }

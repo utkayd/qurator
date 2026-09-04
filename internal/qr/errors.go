@@ -66,3 +66,37 @@ func (e *InvalidOptionError) Error() string {
 
 // Unwrap makes errors.Is(err, ErrInvalidOption) true.
 func (e *InvalidOptionError) Unwrap() error { return ErrInvalidOption }
+
+// Styling rejections (FR-028).
+var (
+	ErrContrastTooLow = errors.New("qr: contrast too low")
+	ErrLogoTooLarge   = errors.New("qr: logo too large")
+)
+
+// ContrastTooLowError reports a foreground/background pair under the gate.
+type ContrastTooLowError struct {
+	Ratio   float64
+	Minimum float64
+}
+
+func (e *ContrastTooLowError) Error() string {
+	return fmt.Sprintf("qr: foreground/background contrast is %.2f:1; at least %.1f:1 is required", e.Ratio, e.Minimum)
+}
+
+// Unwrap makes errors.Is(err, ErrContrastTooLow) true.
+func (e *ContrastTooLowError) Unwrap() error { return ErrContrastTooLow }
+
+// LogoTooLargeError reports a logo over the recoverable-area budget of Level. When
+// automatic raising was allowed, Level is H — the best the symbol can do.
+type LogoTooLargeError struct {
+	Scale    float64
+	MaxScale float64
+	Level    ECLevel
+}
+
+func (e *LogoTooLargeError) Error() string {
+	return fmt.Sprintf("qr: logo covers %.0f%% of the symbol; the maximum at error correction level %s is %.0f%%", e.Scale*100, e.Level, e.MaxScale*100)
+}
+
+// Unwrap makes errors.Is(err, ErrLogoTooLarge) true.
+func (e *LogoTooLargeError) Unwrap() error { return ErrLogoTooLarge }

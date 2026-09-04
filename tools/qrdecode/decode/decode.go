@@ -53,7 +53,11 @@ func SVG(data []byte, sidePx int) (*Result, error) {
 
 // RasterizeSVG renders an SVG document to an RGBA image with oksvg/rasterx.
 func RasterizeSVG(data []byte, sidePx int) (*image.RGBA, error) {
-	icon, err := oksvg.ReadIconStream(bytes.NewReader(data), oksvg.StrictErrorMode)
+	// IgnoreErrorMode: oksvg has no <image> support, and qurator embeds a logo as one.
+	// Skipping it leaves the logo's background-coloured hole in place, which is exactly
+	// what a scanner must cope with. Any malformed module geometry still fails loudly,
+	// because the symbol then does not decode.
+	icon, err := oksvg.ReadIconStream(bytes.NewReader(data), oksvg.IgnoreErrorMode)
 	if err != nil {
 		return nil, fmt.Errorf("parse svg: %w", err)
 	}

@@ -95,6 +95,7 @@ func TestRoundTrip(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			p, s := renderBoth(t, r, baseOptions(tc.content, tc.ec, tc.size))
 			decodeBoth(t, p, s, tc.svgPx, tc.content)
 		})

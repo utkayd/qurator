@@ -3,6 +3,8 @@ package qr
 import (
 	"context"
 	"errors"
+	"image/color"
+	"math"
 	"time"
 )
 
@@ -67,4 +69,42 @@ func (b Bounds) budgetError(err error) error {
 		return &RenderTimeoutError{Timeout: b.MaxDuration}
 	}
 	return err
+}
+
+// Contrast thresholds (research.md §1). The floor is not configurable: below 3:1 the
+// binarisers scanners use cannot separate modules from background reliably.
+const (
+	ContrastFloor      = 3.0
+	DefaultMinContrast = 4.5
+)
+
+// ContrastRatio returns the WCAG 2.x contrast ratio between two colours, in [1, 21].
+// gozxing's binarisers threshold on luminance, so this measures what scanners see.
+func ContrastRatio(a, b color.Color) float64 {
+	la, lb := relativeLuminance(a), relativeLuminance(b)
+	if la < lb {
+		la, lb = lb, la
+	}
+	return (la + 0.05) / (lb + 0.05)
+}
+
+// relativeLuminance implements the sRGB → linear conversion from WCAG 2.x.
+func relativeLuminance(c color.Color) float64 {
+	n := color.NRGBAModel.Convert(c).(color.NRGBA)
+	lin := func(v uint8) float64 {
+		s := float64(v) / 255
+		if s <= 0.04045 {
+			return s / 12.92
+		}
+		return math.Pow((s+0.055)/1.055, 2.4)
+	}
+	return 0.2126*lin(n.R) + 0.7152*lin(n.G) + 0.0722*lin(n.B)
+}
+
+// checkContrast applies the gate.
+func checkContrast(fg, bg color.Color, minimum float64) error {
+	if ratio := ContrastRatio(fg, bg); ratio < minimum {
+		return &ContrastTooLowError{Ratio: math.Round(ratio*100) / 100, Minimum: minimum}
+	}
+	return nil
 }

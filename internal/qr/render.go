@@ -3,6 +3,7 @@ package qr
 import (
 	"context"
 	"fmt"
+	"image"
 	"image/color"
 
 	"github.com/utkayd/qurator/internal/domain"
@@ -41,6 +42,7 @@ type Options struct {
 	Margin  int         // quiet zone in modules, default 4
 	SizePx  int         // side length in pixels, default 512
 	ECLevel ECLevel     // default M
+	Logo    *Logo       // optional centre overlay
 }
 
 // Result is a rendered image.
@@ -58,12 +60,31 @@ type Result struct {
 // Renderer turns Options into image bytes under a fixed policy. It is safe for
 // concurrent use and holds no mutable state.
 type Renderer struct {
-	bounds Bounds
+	bounds      Bounds
+	minContrast float64
+}
+
+// RendererOption tunes a Renderer.
+type RendererOption func(*Renderer)
+
+// WithMinContrast sets the contrast gate (FR-028). Values below ContrastFloor are
+// clamped to it: the floor is where scanners stop working, not a preference.
+func WithMinContrast(ratio float64) RendererOption {
+	return func(r *Renderer) {
+		if ratio < ContrastFloor {
+			ratio = ContrastFloor
+		}
+		r.minContrast = ratio
+	}
 }
 
 // NewRenderer builds a renderer with the given resource bounds.
-func NewRenderer(b Bounds) *Renderer {
-	return &Renderer{bounds: b.normalised()}
+func NewRenderer(b Bounds, opts ...RendererOption) *Renderer {
+	r := &Renderer{bounds: b.normalised(), minContrast: DefaultMinContrast}
+	for _, o := range opts {
+		o(r)
+	}
+	return r
 }
 
 // Bounds returns the renderer's policy.
@@ -114,12 +135,26 @@ func (o Options) normalise() (Options, color.NRGBA, color.NRGBA, error) {
 	if levelRank(o.ECLevel) < 0 {
 		return o, fg, bg, &InvalidOptionError{Field: "ec_level", Reason: fmt.Sprintf("unknown level %q", string(o.ECLevel))}
 	}
+	if o.Logo != nil && (o.Logo.Scale <= 0 || o.Logo.Scale > MaxLogoScale) {
+		return o, fg, bg, &InvalidOptionError{Field: "logo.scale", Reason: fmt.Sprintf("must be between 0.01 and %.2f", MaxLogoScale)}
+	}
 	return o, fg, bg, nil
 }
 
-// Render encodes and renders under the renderer's bounds. Errors are typed (see
-// errors.go); a cancelled parent context is returned as-is.
-func (r *Renderer) Render(ctx context.Context, opts Options) (*Result, error) {
+// Prepared is an encoded symbol with its geometry resolved, ready to be emitted in
+// either format. Both PNG and SVG read the same Geometry.
+type Prepared struct {
+	opts      Options
+	fg, bg    color.NRGBA
+	sym       *Symbol
+	geo       *Geometry
+	logo      *decodedLogo
+	effective ECLevel
+}
+
+// Prepare validates, applies policy, encodes and computes geometry. It does not
+// consult the time budget; Render does. Errors are typed (see errors.go).
+func (r *Renderer) Prepare(ctx context.Context, opts Options) (*Prepared, error) {
 	opts, fg, bg, err := opts.normalise()
 	if err != nil {
 		return nil, err
@@ -127,10 +162,61 @@ func (r *Renderer) Render(ctx context.Context, opts Options) (*Result, error) {
 	if err := r.bounds.checkSize(opts.SizePx); err != nil {
 		return nil, err
 	}
-	if err := r.bounds.checkPayload(len(opts.Content), opts.ECLevel); err != nil {
+	if err := checkContrast(fg, bg, r.minContrast); err != nil {
 		return nil, err
 	}
+	effective := opts.ECLevel
+	var logo *decodedLogo
+	if opts.Logo != nil {
+		if effective, err = resolveLogoLevel(opts.ECLevel, opts.Logo.Scale, opts.Logo.AutoRaise); err != nil {
+			return nil, err
+		}
+		if logo, err = decodeLogo(opts.Logo.Image); err != nil {
+			return nil, err
+		}
+	}
+	// The payload cap is that of the level actually encoded.
+	if err := r.bounds.checkPayload(len(opts.Content), effective); err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	sym, err := Encode(opts.Content, effective)
+	if err != nil {
+		return nil, err
+	}
+	var hole *image.Rectangle
+	if logo != nil {
+		h := logoHole(sym.Size(), opts.Logo.Scale)
+		hole = &h
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return &Prepared{
+		opts:      opts,
+		fg:        fg,
+		bg:        bg,
+		sym:       sym,
+		geo:       computeGeometry(sym, opts.Shape, opts.Margin, hole),
+		logo:      logo,
+		effective: effective,
+	}, nil
+}
 
+// PNG rasterises the prepared symbol.
+func (p *Prepared) PNG(ctx context.Context) ([]byte, error) { return renderPNG(ctx, p) }
+
+// SVG builds the vector document for the prepared symbol.
+func (p *Prepared) SVG(ctx context.Context) ([]byte, error) { return renderSVG(ctx, p) }
+
+// ECLevelEffective is the level encoded after any automatic raise.
+func (p *Prepared) ECLevelEffective() ECLevel { return p.effective }
+
+// Render prepares and emits opts.Format under the renderer's bounds. A cancelled
+// parent context is returned as-is; an exhausted budget is a RenderTimeoutError.
+func (r *Renderer) Render(ctx context.Context, opts Options) (*Result, error) {
 	ctx, cancel := r.bounds.withBudget(ctx)
 	defer cancel()
 
@@ -140,7 +226,7 @@ func (r *Renderer) Render(ctx context.Context, opts Options) (*Result, error) {
 	}
 	done := make(chan outcome, 1)
 	go func() {
-		res, err := r.render(ctx, opts, fg, bg)
+		res, err := r.render(ctx, opts)
 		done <- outcome{res, err}
 	}()
 	select {
@@ -155,35 +241,28 @@ func (r *Renderer) Render(ctx context.Context, opts Options) (*Result, error) {
 	}
 }
 
-// render is the budgeted body of Render; it runs on its own goroutine and must
-// check ctx regularly.
-func (r *Renderer) render(ctx context.Context, opts Options, fg, bg color.NRGBA) (*Result, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	sym, err := Encode(opts.Content, opts.ECLevel)
+// render is the budgeted body of Render; it runs on its own goroutine.
+func (r *Renderer) render(ctx context.Context, opts Options) (*Result, error) {
+	p, err := r.Prepare(ctx, opts)
 	if err != nil {
 		return nil, err
 	}
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
 	var out []byte
-	switch opts.Format {
+	switch p.opts.Format {
 	case FormatSVG:
-		out, err = renderSVG(ctx, sym, opts, fg, bg)
+		out, err = p.SVG(ctx)
 	default:
-		out, err = renderPNG(ctx, sym, opts, fg, bg)
+		out, err = p.PNG(ctx)
 	}
 	if err != nil {
 		return nil, err
 	}
 	return &Result{
 		Bytes:            out,
-		ContentType:      opts.Format.ContentType(),
-		ECLevel:          opts.ECLevel,
-		ECLevelEffective: sym.ECLevel(),
-		Version:          sym.Version(),
+		ContentType:      p.opts.Format.ContentType(),
+		ECLevel:          p.opts.ECLevel,
+		ECLevelEffective: p.effective,
+		Version:          p.sym.Version(),
 	}, nil
 }
 

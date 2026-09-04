@@ -3,11 +3,13 @@ package v1
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -24,9 +26,13 @@ import (
 // keeps the QR handler free of any auth type.
 type IdentityFunc func(*http.Request) bool
 
-// maxJSONBody bounds the POST body: the largest payload is 2953 bytes and the JSON
-// envelope around it is small. Raised in US5 for logos.
-const maxJSONBody = 64 << 10
+// maxBody bounds the POST body. The largest content payload is 2953 bytes; the rest
+// of the budget is a base64 logo (qr.MaxLogoBytes encoded, plus a third for base64).
+const maxBody = 64<<10 + qr.MaxLogoBytes*4/3
+
+// maxMultipartMemory is how much of a multipart body is held in memory before parts
+// spill to disk; sized so a legal request never touches disk.
+const maxMultipartMemory = maxBody
 
 // QRHandler serves GET and POST /v1/qr — ephemeral generation (FR-001..FR-006).
 //
@@ -141,16 +147,29 @@ func (e *fieldError) Error() string { return e.field + ": " + e.msg }
 
 var hexColorRe = regexp.MustCompile(`^#[0-9A-Fa-f]{6}$`)
 
+// logoSpec mirrors OpenAPI LogoSpec. auto_raise is an extension: the contract says a
+// logo raises the effective level "automatically as needed" (FR-027); the flag lets a
+// caller who wants the requested level respected exactly opt out (default true).
+type logoSpec struct {
+	ImageBase64 string   `json:"image_base64"`
+	Scale       *float64 `json:"scale"`
+	AutoRaise   *bool    `json:"auto_raise"`
+}
+
 // stylingRequest mirrors OpenAPI StylingRequest. Pointers distinguish "absent" from a
 // zero value.
 type stylingRequest struct {
-	FgColor       *string `json:"fg_color"`
-	BgColor       *string `json:"bg_color"`
-	ModuleShape   *string `json:"module_shape"`
-	MarginModules *int    `json:"margin_modules"`
-	SizePx        *int    `json:"size_px"`
-	ECLevel       *string `json:"ec_level"`
+	FgColor       *string   `json:"fg_color"`
+	BgColor       *string   `json:"bg_color"`
+	ModuleShape   *string   `json:"module_shape"`
+	MarginModules *int      `json:"margin_modules"`
+	SizePx        *int      `json:"size_px"`
+	ECLevel       *string   `json:"ec_level"`
+	Logo          *logoSpec `json:"logo"`
 }
+
+// defaultLogoScale applies when a logo is sent without a scale.
+const defaultLogoScale = 0.15
 
 // generateRequest mirrors OpenAPI GenerateQrRequest.
 type generateRequest struct {
@@ -195,11 +214,21 @@ func parseQuery(r *http.Request) (qr.Options, error) {
 }
 
 func parseBody(r *http.Request) (qr.Options, error) {
-	ct := r.Header.Get("Content-Type")
-	if mt, _, _ := strings.Cut(ct, ";"); strings.TrimSpace(mt) != "application/json" {
-		return qr.Options{}, &fieldError{"content-type", "must be application/json"}
+	mt, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	if err != nil {
+		return qr.Options{}, &fieldError{"content-type", "is missing or malformed"}
 	}
-	dec := json.NewDecoder(io.LimitReader(r.Body, maxJSONBody+1))
+	switch mt {
+	case "application/json":
+		return parseJSON(r)
+	case "multipart/form-data":
+		return parseMultipart(r)
+	}
+	return qr.Options{}, &fieldError{"content-type", "must be application/json or multipart/form-data"}
+}
+
+func parseJSON(r *http.Request) (qr.Options, error) {
+	dec := json.NewDecoder(io.LimitReader(r.Body, maxBody+1))
 	dec.DisallowUnknownFields()
 	var req generateRequest
 	if err := dec.Decode(&req); err != nil {
@@ -209,6 +238,97 @@ func parseBody(r *http.Request) (qr.Options, error) {
 		return qr.Options{}, &fieldError{"body", "trailing data after the JSON object"}
 	}
 	return req.toOptions()
+}
+
+// parseMultipart accepts the same fields as the query form plus a `logo` file part
+// (with optional `logo_scale` and `logo_auto_raise` fields). It exists so a browser
+// form or curl can send a logo without base64-encoding it.
+func parseMultipart(r *http.Request) (qr.Options, error) {
+	r.Body = http.MaxBytesReader(nil, r.Body, maxBody)
+	if err := r.ParseMultipartForm(maxMultipartMemory); err != nil {
+		return qr.Options{}, &fieldError{"body", "malformed or oversized multipart body"}
+	}
+	defer func() { _ = r.MultipartForm.RemoveAll() }()
+	f := r.MultipartForm.Value
+	str := func(k string) *string {
+		if v, ok := f[k]; ok && len(v) > 0 {
+			return &v[0]
+		}
+		return nil
+	}
+	num := func(k string) (*int, error) {
+		s := str(k)
+		if s == nil {
+			return nil, nil
+		}
+		n, err := strconv.Atoi(*s)
+		if err != nil {
+			return nil, &fieldError{k, "must be an integer"}
+		}
+		return &n, nil
+	}
+	req := generateRequest{Format: str("format"), Styling: &stylingRequest{
+		FgColor:     str("fg_color"),
+		BgColor:     str("bg_color"),
+		ModuleShape: str("module_shape"),
+		ECLevel:     str("ec_level"),
+	}}
+	if c := str("content"); c != nil {
+		req.Content = *c
+	}
+	var err error
+	if req.Styling.MarginModules, err = num("margin_modules"); err != nil {
+		return qr.Options{}, err
+	}
+	if req.Styling.SizePx, err = num("size_px"); err != nil {
+		return qr.Options{}, err
+	}
+	opts, err := req.toOptions()
+	if err != nil {
+		return opts, err
+	}
+	if files := r.MultipartForm.File["logo"]; len(files) > 0 {
+		fh, err := files[0].Open()
+		if err != nil {
+			return opts, &fieldError{"logo", "could not be read"}
+		}
+		defer func() { _ = fh.Close() }()
+		data, err := io.ReadAll(io.LimitReader(fh, qr.MaxLogoBytes+1))
+		if err != nil {
+			return opts, &fieldError{"logo", "could not be read"}
+		}
+		if len(data) > qr.MaxLogoBytes {
+			return opts, &fieldError{"logo", fmt.Sprintf("must be at most %d bytes", qr.MaxLogoBytes)}
+		}
+		logo := &qr.Logo{Image: data, Scale: defaultLogoScale, AutoRaise: true}
+		if s := str("logo_scale"); s != nil {
+			v, err := strconv.ParseFloat(*s, 64)
+			if err != nil {
+				return opts, &fieldError{"logo_scale", "must be a number"}
+			}
+			logo.Scale = v
+		}
+		if s := str("logo_auto_raise"); s != nil {
+			v, err := strconv.ParseBool(*s)
+			if err != nil {
+				return opts, &fieldError{"logo_auto_raise", "must be true or false"}
+			}
+			logo.AutoRaise = v
+		}
+		if err := validateLogo(logo); err != nil {
+			return opts, err
+		}
+		opts.Logo = logo
+	}
+	return opts, nil
+}
+
+// validateLogo applies the schema range for scale.
+func validateLogo(l *qr.Logo) error {
+	if l.Scale < 0.01 || l.Scale > qr.MaxLogoScale {
+		return &fieldError{"logo.scale", fmt.Sprintf("must be between 0.01 and %.2f", qr.MaxLogoScale)}
+	}
+	return nil
 }
 
 // jsonReason keeps decoder messages that are safe to echo (they describe the client's
@@ -292,6 +412,29 @@ func (g generateRequest) toOptions() (qr.Options, error) {
 			return o, &fieldError{"ec_level", "must be L, M, Q or H"}
 		}
 	}
+	if s.Logo != nil {
+		if s.Logo.ImageBase64 == "" {
+			return o, &fieldError{"logo.image_base64", "is required"}
+		}
+		if len(s.Logo.ImageBase64) > qr.MaxLogoBytes*4/3+4 {
+			return o, &fieldError{"logo.image_base64", fmt.Sprintf("must decode to at most %d bytes", qr.MaxLogoBytes)}
+		}
+		data, err := base64.StdEncoding.DecodeString(s.Logo.ImageBase64)
+		if err != nil {
+			return o, &fieldError{"logo.image_base64", "is not valid base64"}
+		}
+		logo := &qr.Logo{Image: data, Scale: defaultLogoScale, AutoRaise: true}
+		if s.Logo.Scale != nil {
+			logo.Scale = *s.Logo.Scale
+		}
+		if s.Logo.AutoRaise != nil {
+			logo.AutoRaise = *s.Logo.AutoRaise
+		}
+		if err := validateLogo(logo); err != nil {
+			return o, err
+		}
+		o.Logo = logo
+	}
 	return o, nil
 }
 
@@ -306,8 +449,18 @@ func writeQRError(w http.ResponseWriter, r *http.Request, err error) {
 		de  *qr.DimensionsExceededError
 		te  *qr.RenderTimeoutError
 		ioe *qr.InvalidOptionError
+		ce  *qr.ContrastTooLowError
+		le  *qr.LogoTooLargeError
 	)
 	switch {
+	case errors.As(err, &ce):
+		httpapi.WriteError(w, httpapi.CodeContrastTooLow,
+			fmt.Sprintf("Foreground/background contrast is %.2f:1; at least %.1f:1 is required.", ce.Ratio, ce.Minimum),
+			map[string]any{"ratio": ce.Ratio, "minimum": ce.Minimum})
+	case errors.As(err, &le):
+		httpapi.WriteError(w, httpapi.CodeLogoTooLarge,
+			fmt.Sprintf("Logo covers %.0f%% of the symbol; the maximum at error correction level %s is %.0f%%.", le.Scale*100, le.Level, le.MaxScale*100),
+			map[string]any{"scale": le.Scale, "max_scale": le.MaxScale, "ec_level": string(le.Level)})
 	case errors.As(err, &fe):
 		httpapi.WriteError(w, httpapi.CodeInvalidRequest, fmt.Sprintf("Parameter '%s' %s.", fe.field, fe.msg), map[string]any{"field": fe.field})
 	case errors.As(err, &ioe):

@@ -267,18 +267,18 @@ and oversized logo rejected (quickstart Scenario 6).
 
 ### Tests for User Story 5 (REQUIRED for contract surfaces — see Principle VII) ⚠️
 
-- [ ] T079 [P] [US5] (Stream A) Write `internal/qr/shape_test.go` — for each of `square`/`dot`/`rounded` at 3 sizes and 4 EC levels, render PNG and SVG, decode both with gozxing, assert equality; assert PNG and SVG derive from the same `Geometry` (a spy counts one geometry computation per render pair)
-- [ ] T080 [P] [US5] (Stream A) Write `internal/qr/logo_test.go` — logo at 4% on EC-L decodes; 6% on EC-L → `ErrLogoTooLarge` with `max_scale=0.05`; 20% on EC-L with `auto_raise=true` → effective level H and decodes; logo present in output (pixel sample)
-- [ ] T081 [P] [US5] (Stream A) Write `internal/qr/contrast_test.go` — `#FEFEFE` on `#FFFFFF` → `ErrContrastTooLow` with the ratio in details; `#101828` on `#FFFFFF` passes; ratio computed by WCAG relative luminance (table of known pairs)
+- [x] T079 [P] [US5] (Stream A) Write `internal/qr/shape_test.go` — for each of `square`/`dot`/`rounded` at 3 sizes and 4 EC levels, render PNG and SVG, decode both with gozxing, assert equality; assert PNG and SVG derive from the same `Geometry` (a spy counts one geometry computation per render pair)
+- [x] T080 [P] [US5] (Stream A) Write `internal/qr/logo_test.go` — logo at 4% on EC-L decodes; 6% on EC-L → `ErrLogoTooLarge` with `max_scale=0.05`; 20% on EC-L with `auto_raise=true` → effective level H and decodes; logo present in output (pixel sample)
+- [x] T081 [P] [US5] (Stream A) Write `internal/qr/contrast_test.go` — `#FEFEFE` on `#FFFFFF` → `ErrContrastTooLow` with the ratio in details; `#101828` on `#FFFFFF` passes; ratio computed by WCAG relative luminance (table of known pairs)
 
 ### Implementation for User Story 5
 
-- [ ] T082 [US5] (Stream A) Create `internal/qr/shape.go` — `Geometry` computed once from `Symbol`: for `square` unit rects; `dot` circles at 0.9 module diameter; `rounded` rects with corner radius chosen by neighbour adjacency so runs join (finder patterns always square for scanner reliability)
-- [ ] T083 [US5] (Stream A) Refactor `render_png.go` and `render_svg.go` to consume `Geometry` instead of the raw grid (PNG via `golang.org/x/image/vector` or `image/draw` with anti-aliasing; SVG emitting `<rect>`/`<circle>`/`<path>` elements)
-- [ ] T084 [US5] (Stream A) Create `internal/qr/logo.go` — decode PNG/JPEG logo, cap at per-level budget (L 5%, M 12%, Q 20%, H 25%), automatic EC raising when `AutoRaise` and the requested level's budget is exceeded (recording `ECLevelEffective`), composite centred with a 1-module bg-coloured pad
-- [ ] T085 [US5] (Stream A) Extend `internal/qr/policy.go` with `ContrastRatio(fg, bg)` (WCAG), hard floor 3:1, configurable default gate 4.5:1 → `ErrContrastTooLow`
-- [ ] T086 [US5] (Stream A) Extend `internal/httpapi/v1/qr.go` to accept the full `StylingRequest` (multipart or base64 logo) and map every `qr` error to its `contracts/errors.md` code with `details`
-- [ ] T087 [US5] (Stream A) Run T079–T081 green, benchmarks not regressed vs T039 baseline, `make lint`; commit on `stream/a-qr`
+- [x] T082 [US5] (Stream A) Create `internal/qr/shape.go` — `Geometry` computed once from `Symbol`: for `square` unit rects; `dot` circles at 0.9 module diameter; `rounded` rects with corner radius chosen by neighbour adjacency so runs join (finder patterns always square for scanner reliability)
+- [x] T083 [US5] (Stream A) Refactor `render_png.go` and `render_svg.go` to consume `Geometry` instead of the raw grid (PNG via `golang.org/x/image/vector` or `image/draw` with anti-aliasing; SVG emitting `<rect>`/`<circle>`/`<path>` elements)
+- [x] T084 [US5] (Stream A) Create `internal/qr/logo.go` — decode PNG/JPEG logo, cap at per-level budget (L 5%, M 12%, Q 20%, H 25%), automatic EC raising when `AutoRaise` and the requested level's budget is exceeded (recording `ECLevelEffective`), composite centred with a 1-module bg-coloured pad
+- [x] T085 [US5] (Stream A) Extend `internal/qr/policy.go` with `ContrastRatio(fg, bg)` (WCAG), hard floor 3:1, configurable default gate 4.5:1 → `ErrContrastTooLow`
+- [x] T086 [US5] (Stream A) Extend `internal/httpapi/v1/qr.go` to accept the full `StylingRequest` (multipart or base64 logo) and map every `qr` error to its `contracts/errors.md` code with `details`
+- [x] T087 [US5] (Stream A) Run T079–T081 green, benchmarks not regressed vs T039 baseline, `make lint`; commit on `stream/a-qr`
 
 ---
 
