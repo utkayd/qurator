@@ -1,0 +1,60 @@
+name: bench
+
+# Guards the two constitutionally protected hot paths (Principle IV: ephemeral render,
+# and the redirect/record path) against performance regressions. Compares this PR's
+# benchmarks against its base with benchstat and fails on any statistically real
+# regression (research.md §6: "fail on any non-`~` positive delta").
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  benchstat:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with: { go-version-file: go.mod }
+
+      - name: Install benchstat
+        run: go install golang.org/x/perf/cmd/benchstat@latest
+
+      - name: Benchmark PR head
+        run: |
+          go test -run '^$' -bench 'BenchmarkRender|BenchmarkRecord' -count=10 -benchmem \
+            ./internal/qr/... ./internal/analytics/... | tee new.txt
+
+      - name: Checkout base ref into a sibling directory
+        run: |
+          git worktree add ../base-ref "origin/${{ github.event.pull_request.base.ref }}"
+
+      - name: Benchmark base ref
+        working-directory: ../base-ref
+        run: |
+          go test -run '^$' -bench 'BenchmarkRender|BenchmarkRecord' -count=10 -benchmem \
+            ./internal/qr/... ./internal/analytics/... | tee "${GITHUB_WORKSPACE}/old.txt"
+
+      - name: Compare with benchstat
+        run: |
+          benchstat old.txt new.txt | tee benchstat.txt
+          echo "## Benchmark comparison (base -> PR)" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          cat benchstat.txt >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Fail on any non-~ positive delta
+        run: |
+          # benchstat marks a comparison "~" when the change is not statistically
+          # significant. Any other delta column value that is a positive percentage
+          # (a regression: slower or more allocations/bytes) fails the job — a negative
+          # delta (an improvement) or "~" is fine.
+          if grep -E '\+[0-9]+(\.[0-9]+)?%' benchstat.txt; then
+            echo "::error::Statistically significant regression detected — see the lines above."
+            exit 1
+          fi
+          echo "No significant regression."

@@ -320,18 +320,18 @@ architectures.
 
 ### Tests for User Story 7 (REQUIRED for contract surfaces — see Principle VII) ⚠️
 
-- [ ] T095 [P] [US7] (Stream F) Write `internal/export/export_test.go` — export against memstore produces one JSONL file per entity with a `manifest.json`; import into a fresh memstore yields identical rows; export streams (assert memory does not scale with row count using a 100k-row fixture and `testing.AllocsPerRun`)
-- [ ] T096 [P] [US7] (Stream F) Write `tests/integration/shutdown_test.go` — start the server, hold 50 in-flight slow requests + 5,000 buffered scan events, send `SIGTERM`, assert all 50 complete 2xx and the store has 5,000 events
+- [x] T095 [P] [US7] (Stream F) Write `internal/export/export_test.go` — export against memstore produces one JSONL file per entity with a `manifest.json`; import into a fresh memstore yields identical rows; export streams (assert memory does not scale with row count using a 100k-row fixture and `testing.AllocsPerRun`)
+- [x] T096 [P] [US7] (Stream F) Write `tests/integration/shutdown_test.go` — start the server, hold 50 in-flight slow requests + 5,000 buffered scan events, send `SIGTERM`, assert all 50 complete 2xx and the store has 5,000 events
 
 ### Implementation for User Story 7
 
-- [ ] T097 [P] [US7] (Stream F) Create `internal/export/export.go` and `import.go` (streaming JSONL per entity + manifest, `ErrConflict` on import into a non-empty store unless `--force`), `internal/httpapi/v1/export.go` (`GET /v1/export`, admin only, `application/x-ndjson` streaming), and `export`/`import` subcommands in a NEW file `cmd/qurator/export_cmd.go` (not `main.go`)
-- [ ] T098 [P] [US7] (Stream F) Create `deploy/Dockerfile` — multi-stage, `CGO_ENABLED=0`, `-trimpath -buildid=`, `SOURCE_DATE_EPOCH`, final stage `gcr.io/distroless/static-debian13:nonroot@sha256:<pinned>`; and `deploy/compose.yaml` with Postgres 16 + MinIO for the upgrade path and local contract tests
-- [ ] T099 [P] [US7] (Stream F) Create `.github/workflows/contract-tests.yml` — Postgres 16 and MinIO as `services:`, exporting `QURATOR_TEST_PG_DSN`/`QURATOR_TEST_S3_ENDPOINT`, running `go test -race ./...` so the skipped suites execute
-- [ ] T100 [P] [US7] (Stream F) Create `.github/workflows/bench.yml` — run `BenchmarkRenderPNG`, `BenchmarkRenderSVG`, `BenchmarkRecord`, and a redirect benchmark with `-count=10` on base and PR, compare with `benchstat`, fail on any non-`~` positive delta
-- [ ] T101 [P] [US7] (Stream F) Create `.github/workflows/release.yml` — on tag: `docker buildx --platform linux/amd64,linux/arm64` with `--rewrite-timestamp`, push, then a smoke job that runs the image on both platforms as `nonroot` and curls `/healthz`
-- [ ] T102 [P] [US7] (Stream F) Write `README.md` — the one-command start with NO configuration as the first thing on the page (Constitution sync report flags this as pending), the two modes, the upgrade path to Postgres/S3, forward-auth setup with oauth2-proxy/Authelia examples, the `302` and no-IP privacy statements, and the export path
-- [ ] T103 [US7] (Stream F) Run T095–T096 green, `make lint`; commit on `stream/f-ops`
+- [x] T097 [P] [US7] (Stream F) Create `internal/export/export.go` and `import.go` (streaming JSONL per entity + manifest, `ErrConflict` on import into a non-empty store unless `--force`), `internal/httpapi/v1/export.go` (`GET /v1/export`, admin only, `application/x-ndjson` streaming), and `export`/`import` subcommands in a NEW file `cmd/qurator/export_cmd.go` (not `main.go`)
+- [x] T098 [P] [US7] (Stream F) Create `deploy/Dockerfile` — multi-stage, `CGO_ENABLED=0`, `-trimpath -buildid=`, `SOURCE_DATE_EPOCH`, final stage `gcr.io/distroless/static-debian13:nonroot@sha256:<pinned>`; and `deploy/compose.yaml` with Postgres 16 + MinIO for the upgrade path and local contract tests
+- [x] T099 [P] [US7] (Stream F) Create `.github/workflows/contract-tests.yml` — Postgres 16 and MinIO as `services:`, exporting `QURATOR_TEST_PG_DSN`/`QURATOR_TEST_S3_ENDPOINT`, running `go test -race ./...` so the skipped suites execute
+- [x] T100 [P] [US7] (Stream F) Create `.github/workflows/bench.yml` — run `BenchmarkRenderPNG`, `BenchmarkRenderSVG`, `BenchmarkRecord`, and a redirect benchmark with `-count=10` on base and PR, compare with `benchstat`, fail on any non-`~` positive delta
+- [x] T101 [P] [US7] (Stream F) Create `.github/workflows/release.yml` — on tag: `docker buildx --platform linux/amd64,linux/arm64` with `--rewrite-timestamp`, push, then a smoke job that runs the image on both platforms as `nonroot` and curls `/healthz`
+- [x] T102 [P] [US7] (Stream F) Write `README.md` — the one-command start with NO configuration as the first thing on the page (Constitution sync report flags this as pending), the two modes, the upgrade path to Postgres/S3, forward-auth setup with oauth2-proxy/Authelia examples, the `302` and no-IP privacy statements, and the export path
+- [x] T103 [US7] (Stream F) Run T095–T096 green, `make lint`; commit on `stream/f-ops`
 
 ---
 
