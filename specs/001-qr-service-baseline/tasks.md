@@ -28,7 +28,7 @@ Stage 3 is serial integration.
 | Stream | Owns exclusively | Stories | Worktree branch |
 |--------|------------------|---------|-----------------|
 | A | `internal/qr/`, `internal/httpapi/v1/qr.go`, `tools/qrdecode/` | US1, US5 | `stream/a-qr` |
-| B | `internal/store/sqlite/`, `internal/store/postgres/`, `internal/store/migrations/`, `internal/blob/fsblob/`, `internal/blob/s3blob/`, `internal/httpapi/v1/codes.go`, `internal/httpapi/public/` | US2, US7 | `stream/b-store` |
+| B | `internal/codes/**`, `internal/store/sqlite/`, `internal/store/postgres/`, `internal/store/migrations/`, `internal/blob/fsblob/`, `internal/blob/s3blob/`, `internal/httpapi/v1/codes.go`, `internal/httpapi/public/` | US2, US7 | `stream/b-store` |
 | C | `internal/auth/`, `internal/httpapi/v1/auth.go`, `internal/httpapi/v1/tokens.go`, `internal/httpapi/v1/admin.go` | US3 | `stream/c-auth` |
 | D | `internal/analytics/`, `internal/httpapi/v1/analytics.go` | US4 | `stream/d-analytics` |
 | E | `internal/console/` | US6 | `stream/e-console` |
@@ -37,7 +37,7 @@ Stage 3 is serial integration.
 **Contention rule**: a stream that must change a file outside its ownership (most likely
 `cmd/qurator/main.go` wiring or `internal/httpapi/router.go`) does NOT edit it. It records
 the needed change as a one-line note in its final commit message and the change is applied
-in Stage 3 (T098). Foundation lands the full route table and wiring as stubs precisely so
+in Stage 3 (T104). Foundation lands the full route table and wiring as stubs precisely so
 this is rare.
 
 ## Path Conventions
@@ -140,7 +140,7 @@ called (quickstart Scenario 2).
 
 - [x] T032 [P] [US1] (Stream A) Create `tools/qrdecode/main.go` — a CLI wrapping `makiuchi-d/gozxing` that decodes a PNG (and an SVG, via `oksvg`+`rasterx` rasterisation) to stdout, reading bytes via `ResultMetadataType_BYTE_SEGMENTS`; used by quickstart and by the tests below
 - [x] T033 [P] [US1] (Stream A) Write `internal/qr/encode_test.go` round-trip table: ASCII, emoji, RTL Arabic, a 2,953-byte payload at EC-L, a 1,273-byte payload at EC-H, raw `[]byte{0x00, 0xFF, 0x80}` — each rendered to PNG and SVG and decoded with gozxing, asserting exact equality; plus a determinism test (`bytes.Equal` across two renders) and an over-capacity test expecting `ErrContentTooLarge`
-- [x] T034 [P] [US1] (Stream A) Write `internal/qr/encode_test.go::TestECLevelHonoured` asserting a request for EC-L yields a symbol gozxing reports as EC-L (the `boostEcl` trap in research §1)
+- [x] T034 [US1] (Stream A) Write `internal/qr/encode_test.go::TestECLevelHonoured` asserting a request for EC-L yields a symbol gozxing reports as EC-L (the `boostEcl` trap in research §1)
 - [x] T035 [P] [US1] (Stream A) Write `tests/contract/qr_test.go` against the OpenAPI contract for `/v1/qr`: PNG and SVG content types, `413 content_too_large`, `401` without credential by default, `200` when `ephemeral.public=true`, `429 rate_limited` after the configured burst, and byte-identical responses for identical params
 
 ### Implementation for User Story 1
@@ -344,9 +344,12 @@ architectures.
 - [x] T106 (Stream 0) Write `tests/integration/privacy_test.go` — after 1,000 scans, dump every table on both backends and assert no value matches an IPv4/IPv6 pattern and no column name contains `ip`, `addr`, `geo`, `country` (SC-012)
 - [x] T107 (Stream 0) Write `tests/integration/stall_test.go` — swap in a `Store` whose `InsertScanBatch` blocks forever; run 10,000 redirects with `hey`-equivalent in-process load; assert p99 < 50ms and `qurator_scan_events_dropped_total` > 0 (SC-005, Principle IV)
 - [x] T108 (Stream 0) Write `tests/integration/zeroconfig_test.go` — `exec` the built binary with `env -i PATH=...` in a temp dir, assert it serves `/healthz` and `/v1/qr` (with dev mode? NO — assert it REFUSES with the signing-secret message, then passes with `QURATOR_DEV_MODE=1`) (SC-002, FR-040)
-- [ ] T109 (Stream 0) Execute every scenario in `quickstart.md` by hand against the merged build on SQLite+fs, then via `deploy/compose.yaml` on Postgres+S3; record results in `specs/001-qr-service-baseline/checklists/quickstart-results.md`
+- [x] T109 (Stream 0) Execute every scenario in `quickstart.md` by hand against the merged build on SQLite+fs, then via `deploy/compose.yaml` on Postgres+S3; record results in `specs/001-qr-service-baseline/checklists/quickstart-results.md`
 - [ ] T110 (Stream 0) Run `/speckit-analyze` for cross-artifact consistency, then `/security-review` on the branch; fix findings; ensure `make build test lint bench` green and `tests/arch` green
 - [ ] T111 (Stream 0) Open the PR to `main` with the quickstart results linked; tag `v1.0.0-rc1` after merge and confirm `release.yml` publishes a multi-arch image that runs as non-root
+- [x] T112 (Stream 0) Add BenchmarkRedirectWarm/Cold in internal/httpapi/public/bench_test.go and gate them in .github/workflows/bench.yml (analysis C2)
+- [x] T113 (Stream 0) Rate-limit POST /v1/auth/signin on the public group via Options.SigninLimiter with a router test (analysis I2)
+- [x] T114 (Stream 0) Reject future-dated and expired session tokens with a 60s leeway; tests in internal/auth (analysis G4)
 
 ---
 
@@ -400,7 +403,7 @@ it a face.
 
 ## Notes
 
-- 111 tasks: Stage 1 = 31, Stage 2 = 72 (A 22, B 16, C 11, D 10, E 7, F 9 — Stream A is
+- 111 tasks: Stage 1 = 31, Stage 2 = 72 (A 19, B 16, C 11, D 10, E 7, F 9 — Stream A is
   the largest because the in-house shape renderer is real work no dependency provides),
   Stage 3 = 8
 - Module path `github.com/utkayd/qurator` confirmed by the project owner

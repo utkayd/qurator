@@ -13,6 +13,7 @@ import (
 func validConfig() Config {
 	var c Config
 	c.Server.Listen = ":8080"
+	c.Server.DataDir = "./data"
 	c.DB.Driver = "sqlite"
 	c.DB.DSN = "./data/qurator.db"
 	c.Blob.Driver = "fs"
@@ -35,12 +36,32 @@ func TestValidate_Rules(t *testing.T) {
 		wantErr string // substring expected in the joined error
 	}{
 		{
-			name: "signing secret empty and dev mode off",
+			// FR-040: an empty secret is generated and persisted at startup,
+			// so validation no longer refuses it.
+			name: "signing secret empty and dev mode off is fine",
 			mutate: func(c *Config) {
 				c.Auth.SigningSecret = ""
 				c.Auth.DevMode = false
 			},
-			wantErr: "QURATOR_AUTH_SIGNING_SECRET",
+			wantErr: "",
+		},
+		{
+			name: "signing secret empty with nowhere to persist one",
+			mutate: func(c *Config) {
+				c.Auth.SigningSecret = ""
+				c.Auth.DevMode = false
+				c.Server.DataDir = ""
+			},
+			wantErr: "QURATOR_SERVER_DATA_DIR",
+		},
+		{
+			name: "signing secret empty, no data dir, but dev mode on is fine",
+			mutate: func(c *Config) {
+				c.Auth.SigningSecret = ""
+				c.Auth.DevMode = true
+				c.Server.DataDir = ""
+			},
+			wantErr: "",
 		},
 		{
 			name: "signing secret empty but dev mode on is fine",
@@ -190,7 +211,7 @@ func TestValidate_JoinsAllProblems(t *testing.T) {
 		t.Fatal("Validate() = nil for a zero-value Config, want multiple errors")
 	}
 	msg := err.Error()
-	for _, want := range []string{"signing_secret", "db.driver", "blob.driver", "allowed_schemes"} {
+	for _, want := range []string{"data_dir", "db.driver", "blob.driver", "allowed_schemes"} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("joined error missing %q; got: %s", want, msg)
 		}
@@ -209,15 +230,33 @@ func mapEnv(m map[string]string) func(string) (string, bool) {
 	}
 }
 
-func TestLoad_EmptyEnvNoDevModeFails(t *testing.T) {
-	// FR-040: with no signing secret and dev mode not explicitly enabled,
-	// Load must refuse to produce a Config.
-	_, err := Load(nil, noEnv)
-	if err == nil {
-		t.Fatal("Load(empty env, no args) = nil error, want failure (FR-040)")
+func TestLoad_EmptyEnvSucceeds(t *testing.T) {
+	// Constitution Principle I / FR-040: an empty environment is a valid
+	// configuration. The signing secret is left empty for the binary to
+	// generate into <server.data_dir>/signing.key; Load itself never
+	// touches the filesystem for it.
+	cfg, err := Load(nil, noEnv)
+	if err != nil {
+		t.Fatalf("Load(empty env, no args) = %v, want success", err)
 	}
-	if !strings.Contains(err.Error(), "QURATOR_AUTH_SIGNING_SECRET") {
-		t.Errorf("error does not name the fix: %v", err)
+	if cfg.Auth.SigningSecret.IsSet() {
+		t.Error("Auth.SigningSecret is set from an empty env, want empty")
+	}
+	if cfg.Auth.DevMode {
+		t.Error("Auth.DevMode = true from an empty env, want false")
+	}
+	if cfg.Server.DataDir != "./data" {
+		t.Errorf("Server.DataDir = %q, want ./data", cfg.Server.DataDir)
+	}
+}
+
+func TestLoad_DataDirFromEnv(t *testing.T) {
+	cfg, err := Load(nil, mapEnv(map[string]string{"QURATOR_SERVER_DATA_DIR": "/var/lib/qurator"}))
+	if err != nil {
+		t.Fatalf("Load() = %v", err)
+	}
+	if cfg.Server.DataDir != "/var/lib/qurator" {
+		t.Errorf("Server.DataDir = %q, want /var/lib/qurator", cfg.Server.DataDir)
 	}
 }
 

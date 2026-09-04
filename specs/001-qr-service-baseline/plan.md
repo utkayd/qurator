@@ -77,7 +77,7 @@ requirements across 7 user stories.
 
 *GATE: Must pass before Phase 0 research. Re-check after Phase 1 design.*
 
-Evaluated against `.specify/memory/constitution.md` v1.0.0. Each gate names the design
+Initial gate evaluated against constitution v1.0.0; the post-design re-evaluation below is against v1.0.1. Each gate names the design
 commitment that satisfies it and the check that proves it, so the gate is falsifiable
 rather than a declaration of intent.
 
@@ -239,7 +239,11 @@ specs/001-qr-service-baseline/
 
 ```text
 cmd/
-└── qurator/                  # main: wire config → stores → services → server
+└── qurator/                  # main.go wiring, console_adapters.go, export_cmd.go subcommands
+
+tools/
+├── qrdecode/                 # independent decoder CLI + library used by tests (Stream A)
+└── depspin/                  # build-tagged import pins keeping go.mod stable; never compiled
 
 internal/
 ├── domain/                   # Pure types. Imports no net/http, no database/sql.
@@ -251,6 +255,7 @@ internal/
 │   ├── logo.go               #   overlay + automatic EC raising
 │   └── policy.go             #   contrast gate, size/duration bounds
 ├── shortcode/                # generation, alias validation, reserved words
+├── codes/                    # dynamic-code service + resolution cache (Stream B)
 ├── store/                    # Store interface + sentinel errors
 │   ├── storetest/            #   ONE contract suite, run by both drivers
 │   ├── migrations/           #   goose Go migrations, one ordered sequence

@@ -43,6 +43,11 @@ type ServerConfig struct {
 	Listen        string `koanf:"listen"`
 	BaseURL       string `koanf:"base_url"`
 	MetricsListen string `koanf:"metrics_listen"`
+	// DataDir is where qurator keeps state it creates for itself and that
+	// is not otherwise located by config: today that is the generated
+	// credential signing secret (signing.key, FR-040). It is created 0700
+	// on first start if missing.
+	DataDir string `koanf:"data_dir"`
 }
 
 // DBConfig selects and locates the metadata store.
@@ -152,6 +157,7 @@ func defaults() map[string]any {
 		"server.listen":         ":8080",
 		"server.base_url":       "",
 		"server.metrics_listen": "",
+		"server.data_dir":       "./data",
 
 		"db.driver": "sqlite",
 		"db.dsn":    "./data/qurator.db",
@@ -223,6 +229,7 @@ var leafFields = []fieldSpec{
 	{"server.listen", kString},
 	{"server.base_url", kString},
 	{"server.metrics_listen", kString},
+	{"server.data_dir", kString},
 
 	{"db.driver", kString},
 	{"db.dsn", kString},
@@ -344,6 +351,7 @@ func flagSet() *flag.FlagSet {
 	fs.String("server-listen", "", "public HTTP listen address")
 	fs.String("server-base-url", "", "externally visible base URL")
 	fs.String("server-metrics-listen", "", "internal metrics listen address (empty disables /metrics)")
+	fs.String("server-data-dir", "", "directory for self-generated state such as signing.key")
 
 	fs.String("db-driver", "", "metadata store driver (sqlite|postgres)")
 	fs.String("db-dsn", "", "metadata store DSN")
@@ -358,8 +366,8 @@ func flagSet() *flag.FlagSet {
 	fs.Bool("blob-s3-use-ssl", true, "use TLS when talking to S3")
 	fs.Bool("blob-s3-path-style", false, "use path-style S3 addressing")
 
-	fs.String("auth-signing-secret", "", "credential signing secret")
-	fs.Bool("auth-dev-mode", false, "allow startup without a signing secret")
+	fs.String("auth-signing-secret", "", "credential signing secret (generated into <data-dir>/signing.key when empty)")
+	fs.Bool("auth-dev-mode", false, "use an ephemeral signing key instead of persisting one")
 	fs.String("auth-bootstrap-email", "", "bootstrap admin email")
 	fs.String("auth-bootstrap-password", "", "bootstrap admin password")
 	fs.Duration("auth-session-ttl", 0, "session lifetime")

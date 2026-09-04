@@ -38,7 +38,16 @@ type Options struct {
 	PerRoute []Middleware
 	Auth     Middleware
 	CSRF     Middleware // cookie-session CSRF check; protected group only
+	// SigninLimiter, when set, wraps ONLY "POST /v1/auth/signin". That route lives in
+	// the public group (it must be reachable anonymously) yet accepts a password, so it
+	// is the one public route that needs a brute-force limiter. It is applied innermost,
+	// so PerRoute middleware still observes rejected attempts.
+	SigninLimiter Middleware
 }
+
+// SigninPattern is the one public route that takes a password; Options.SigninLimiter
+// is applied to it alone.
+const SigninPattern = "POST /v1/auth/signin"
 
 // Routes is the full route table from contracts/openapi.yaml plus the console.
 // Every entry is registered even when its handler is a stub, so Stage 2 streams fill
@@ -49,7 +58,7 @@ var Routes = []Route{
 	{Group: GroupPublic, Pattern: "GET /i/{file}", Handler: "Public"},
 	{Group: GroupPublic, Pattern: "GET /healthz", Handler: "Healthz"},
 	{Group: GroupPublic, Pattern: "GET /readyz", Handler: "Readyz"},
-	{Group: GroupPublic, Pattern: "POST /v1/auth/signin", Handler: "Auth"},
+	{Group: GroupPublic, Pattern: SigninPattern, Handler: "Auth"},
 
 	// Protected — full chain.
 	{Group: GroupProtected, Pattern: "GET /v1/qr", Handler: "QR"},
@@ -103,6 +112,9 @@ func NewRouter(h Handlers, o Options) http.Handler {
 
 	for _, rt := range Routes {
 		hd := withPattern(rt.Pattern, h.lookup(rt.Handler))
+		if rt.Pattern == SigninPattern && o.SigninLimiter != nil {
+			hd = o.SigninLimiter(hd)
+		}
 		for i := len(o.PerRoute) - 1; i >= 0; i-- {
 			hd = o.PerRoute[i](hd)
 		}
@@ -133,7 +145,7 @@ func NewRouter(h Handlers, o Options) http.Handler {
 	root.Handle("/i/", public)
 	root.Handle("/healthz", public)
 	root.Handle("/readyz", public)
-	root.Handle("POST /v1/auth/signin", public)
+	root.Handle(SigninPattern, public)
 	root.Handle("/v1/", protectedChain)
 	root.Handle("/ui/", consoleChain)
 	root.Handle("/", http.RedirectHandler("/ui/", http.StatusFound))

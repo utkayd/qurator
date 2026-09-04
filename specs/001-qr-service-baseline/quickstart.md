@@ -35,12 +35,22 @@ env -i PATH=/usr/bin:/bin ./bin/qurator
 required, rather than proving your shell happens to have the right variables set.
 
 **Expected**: starts in under a second; logs the SQLite path and the local blob directory
-it created; serves on the default port. No error, no missing-dependency warning.
+it created; logs `generated signing secret` with the path `data/signing.key`; serves on
+the default port. No error, no missing-dependency warning.
 
 ```bash
 curl -fsS localhost:8080/healthz    # 200
 curl -fsS localhost:8080/readyz     # 200
+stat -f '%Lp' data/signing.key      # 600 (Linux: stat -c '%a')
 ```
+
+**Then prove the secret persists** (FR-040): stop the process, start it again in the
+same directory, and confirm the log line `generated signing secret` does NOT appear a
+second time and `data/signing.key` is byte-identical. Sessions issued before the restart
+still verify after it. `data/signing.key` is part of the instance's state: back it up
+with the database, or set `QURATOR_AUTH_SIGNING_SECRET` to manage the secret yourself.
+Pointing `QURATOR_SERVER_DATA_DIR` at an unwritable location with no secret configured
+must refuse to start with a message naming `QURATOR_AUTH_SIGNING_SECRET`.
 
 ---
 

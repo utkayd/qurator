@@ -11,19 +11,124 @@ import (
 	"time"
 )
 
-// T108 / quickstart Scenario 1 / SC-002 / FR-040: the binary exec'd with an EMPTY
-// environment in a fresh directory. It must refuse to start without a signing secret
-// (naming the variable that fixes it), and with nothing but dev mode switched on it
-// must serve a working instance on SQLite + the local filesystem, having created its
-// own data directory.
+// T108 / quickstart Scenario 1 / SC-001, SC-002 / FR-040: the binary exec'd with an
+// EMPTY environment in a fresh directory must start and serve, generating its own
+// credential signing secret into ./data/signing.key (0600) and reusing it on every
+// later start so sessions survive restarts. With nothing but dev mode switched on it
+// must likewise serve a working instance on SQLite + the local filesystem.
 
-// TestZeroConfig_RefusesWithoutSigningSecret: no env at all → non-zero exit, and the
-// error names QURATOR_AUTH_SIGNING_SECRET so the operator knows what to set.
-func TestZeroConfig_RefusesWithoutSigningSecret(t *testing.T) {
+// TestZeroConfig_EmptyEnvStartsAndPersistsSecret: no env at all → starts, /healthz
+// is 200, data/signing.key exists with mode 0600. Restarting on the same directory
+// reuses the key byte-for-byte, and a session issued before a restart still verifies
+// after it.
+func TestZeroConfig_EmptyEnvStartsAndPersistsSecret(t *testing.T) {
 	dir := t.TempDir()
-	code, stderr := itRun(t, dir, nil, 5*time.Second)
+	keyPath := filepath.Join(dir, "data", "signing.key")
+	client := itClient()
+
+	// 1. Completely empty environment (only the listen port, so the test can reach it).
+	started := time.Now()
+	p := itStart(t, dir, nil)
+	if took := time.Since(started); took > 5*time.Second {
+		t.Fatalf("took %s to become healthy, want < 5s (SC-002)", took)
+	}
+	resp, err := client.Get(p.Base + "/healthz")
+	if err != nil {
+		t.Fatalf("GET /healthz: %v", err)
+	}
+	_, _ = io.Copy(io.Discard, resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("/healthz: %d", resp.StatusCode)
+	}
+
+	fi, err := os.Stat(keyPath)
+	if err != nil {
+		t.Fatalf("signing key not persisted at %s: %v", keyPath, err)
+	}
+	if perm := fi.Mode().Perm(); perm != 0o600 {
+		t.Fatalf("%s mode = %o, want 0600", keyPath, perm)
+	}
+	key1, err := os.ReadFile(keyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(strings.TrimSpace(string(key1))) == 0 {
+		t.Fatal("signing key file is empty")
+	}
+	if !strings.Contains(p.Stderr.String(), "generated signing secret") {
+		t.Errorf("first start did not log key generation; stderr:\n%s", p.Stderr.String())
+	}
+	if strings.Contains(p.Stderr.String(), strings.TrimSpace(string(key1))) {
+		t.Fatal("the generated secret value appeared in the log output")
+	}
+	p.Signal(t, syscall.SIGTERM)
+	if code := p.Wait(t, 20*time.Second); code != 0 {
+		t.Fatalf("exit code %d after SIGTERM, want 0; stderr:\n%s", code, p.Stderr.String())
+	}
+
+	// 2. Restart with a bootstrap admin (still no secret, no dev mode): the key must be
+	// reused, not regenerated, and a session can be issued against it.
+	env := map[string]string{
+		"QURATOR_AUTH_BOOTSTRAP_EMAIL":    itAdminEmail,
+		"QURATOR_AUTH_BOOTSTRAP_PASSWORD": itAdminPassword,
+	}
+	p = itStart(t, dir, env)
+	key2, err := os.ReadFile(keyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(key1) != string(key2) {
+		t.Fatal("signing key changed across a restart on the same data dir")
+	}
+	if strings.Contains(p.Stderr.String(), "generated signing secret") {
+		t.Errorf("second start regenerated the signing secret; stderr:\n%s", p.Stderr.String())
+	}
+	sess, _ := itSignin(t, p.Base, itAdminEmail, itAdminPassword)
+	if r := sess.itDo(http.MethodGet, "/v1/auth/me", nil, nil); r.Status != http.StatusOK {
+		t.Fatalf("/v1/auth/me before restart: %d %s", r.Status, r.Body)
+	}
+	p.Signal(t, syscall.SIGTERM)
+	if code := p.Wait(t, 20*time.Second); code != 0 {
+		t.Fatalf("exit code %d after SIGTERM, want 0; stderr:\n%s", code, p.Stderr.String())
+	}
+
+	// 3. Restart again: the cookie minted by the previous process must still verify.
+	p = itStart(t, dir, env)
+	key3, err := os.ReadFile(keyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(key1) != string(key3) {
+		t.Fatal("signing key changed across the second restart")
+	}
+	sess.base = p.Base
+	if r := sess.itDo(http.MethodGet, "/v1/auth/me", nil, nil); r.Status != http.StatusOK {
+		t.Fatalf("/v1/auth/me after restart with the old cookie: %d %s (session did not survive)", r.Status, r.Body)
+	}
+	p.Signal(t, syscall.SIGTERM)
+	if code := p.Wait(t, 20*time.Second); code != 0 {
+		t.Fatalf("exit code %d after SIGTERM, want 0; stderr:\n%s", code, p.Stderr.String())
+	}
+}
+
+// TestZeroConfig_RefusesWhenSecretCannotBePersisted: no secret, no dev mode, and a
+// data dir that cannot be written → non-zero exit, and the error names
+// QURATOR_AUTH_SIGNING_SECRET as the way out (FR-040).
+func TestZeroConfig_RefusesWhenSecretCannotBePersisted(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+	dir := t.TempDir()
+	ro := filepath.Join(dir, "readonly")
+	if err := os.Mkdir(ro, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(ro, 0o700) })
+
+	code, stderr := itRun(t, dir, map[string]string{"QURATOR_SERVER_DATA_DIR": filepath.Join(ro, "data")}, 5*time.Second)
 	if code == 0 {
-		t.Fatalf("binary started with no configuration; must refuse without a signing secret (FR-040)")
+		t.Fatalf("binary started although the signing secret could not be persisted (FR-040)")
 	}
 	if !strings.Contains(stderr, "QURATOR_AUTH_SIGNING_SECRET") {
 		t.Fatalf("stderr does not name QURATOR_AUTH_SIGNING_SECRET:\n%s", stderr)

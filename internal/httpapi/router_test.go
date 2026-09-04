@@ -157,3 +157,61 @@ func TestPerRouteMiddlewareSeesLeafPattern(t *testing.T) {
 		t.Fatalf("patterns seen = %q, want %q", seen, want)
 	}
 }
+
+// burstLimiter is a NewRateLimiter-equivalent stand-in (this package cannot import
+// middleware without a cycle): the first burst requests pass, the rest get 429 with
+// Retry-After, keyed on nothing because the test uses a single peer.
+func burstLimiter(burst int) Middleware {
+	var n int
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			n++
+			if n > burst {
+				w.Header().Set("Retry-After", "6")
+				WriteError(w, CodeRateLimited, "Too many requests.", nil)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+func TestSigninLimiterAppliesOnlyToSignin(t *testing.T) {
+	ok := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
+	h := NewRouter(Handlers{Auth: ok, Healthz: ok}, Options{SigninLimiter: burstLimiter(10)})
+	for i := 1; i <= 10; i++ {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest("POST", "/v1/auth/signin", strings.NewReader(`{}`)))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("attempt %d: %d, want 200", i, rec.Code)
+		}
+	}
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("POST", "/v1/auth/signin", strings.NewReader(`{}`)))
+	if rec.Code != http.StatusTooManyRequests || rec.Header().Get("Retry-After") == "" {
+		t.Fatalf("attempt 11: %d Retry-After=%q, want 429 with Retry-After", rec.Code, rec.Header().Get("Retry-After"))
+	}
+	if !strings.Contains(rec.Body.String(), `"rate_limited"`) {
+		t.Fatalf("attempt 11 body = %s, want rate_limited envelope", rec.Body.String())
+	}
+	// Other public routes never pass through the sign-in limiter.
+	for i := 0; i < 20; i++ {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest("GET", "/healthz", nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("/healthz after limit: %d, want 200", rec.Code)
+		}
+	}
+}
+
+func TestSigninLimiterIsOptional(t *testing.T) {
+	ok := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
+	h := NewRouter(Handlers{Auth: ok}, Options{})
+	for i := 0; i < 50; i++ {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest("POST", "/v1/auth/signin", nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("nil limiter: %d, want 200", rec.Code)
+		}
+	}
+}

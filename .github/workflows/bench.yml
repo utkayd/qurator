@@ -1,7 +1,8 @@
 name: bench
 
-# Guards the two constitutionally protected hot paths (Principle IV: ephemeral render,
-# and the redirect/record path) against performance regressions. Compares this PR's
+# Guards the constitutionally protected hot paths (Principle III: ephemeral render;
+# Principle IV: the redirect handler and the scan recorder) against performance
+# regressions. Compares this PR's
 # benchmarks against its base with benchstat and fails on any statistically real
 # regression (research.md §6: "fail on any non-`~` positive delta").
 on:
@@ -26,8 +27,8 @@ jobs:
 
       - name: Benchmark PR head
         run: |
-          go test -run '^$' -bench 'BenchmarkRender|BenchmarkRecord' -count=10 -benchmem \
-            ./internal/qr/... ./internal/analytics/... | tee new.txt
+          go test -run '^$' -bench 'BenchmarkRender|BenchmarkRecord|BenchmarkRedirect' -count=10 -benchmem \
+            ./internal/qr/... ./internal/analytics/... ./internal/httpapi/public/... | tee new.txt
 
       - name: Checkout base ref into a sibling directory
         run: |
@@ -36,8 +37,8 @@ jobs:
       - name: Benchmark base ref
         working-directory: ../base-ref
         run: |
-          go test -run '^$' -bench 'BenchmarkRender|BenchmarkRecord' -count=10 -benchmem \
-            ./internal/qr/... ./internal/analytics/... | tee "${GITHUB_WORKSPACE}/old.txt"
+          go test -run '^$' -bench 'BenchmarkRender|BenchmarkRecord|BenchmarkRedirect' -count=10 -benchmem \
+            ./internal/qr/... ./internal/analytics/... ./internal/httpapi/public/... | tee "${GITHUB_WORKSPACE}/old.txt"
 
       - name: Compare with benchstat
         run: |

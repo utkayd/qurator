@@ -14,6 +14,12 @@ import (
 // SessionCookieName is the host-only session cookie set by POST /v1/auth/signin.
 const SessionCookieName = "qurator_session"
 
+// ClockLeeway is how far a session's iat/exp may disagree with this instance's clock
+// before the session is rejected. It absorbs ordinary NTP drift between the issuing
+// and verifying process (a restart, a future second instance) without letting a
+// materially future-dated or expired token through.
+const ClockLeeway = 60 * time.Second
+
 // sessionClaims is the HS256 payload: sub (user ID), jti, tv (token_version), iat, exp.
 type sessionClaims struct {
 	TokenVersion int64 `json:"tv"`
@@ -51,7 +57,8 @@ func (a *Authenticator) verifySession(ctx context.Context, token string) (*domai
 		jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}),
 		jwt.WithTimeFunc(a.now),
 		jwt.WithExpirationRequired(),
-		jwt.WithIssuedAt(),
+		jwt.WithIssuedAt(), // a future iat is a forgery or a broken clock: reject, within ClockLeeway
+		jwt.WithLeeway(ClockLeeway),
 	)
 	if err != nil || claims.Subject == "" {
 		return nil, ErrUnauthorized

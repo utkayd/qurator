@@ -11,8 +11,17 @@ scanner's IP address, and walk away with your data in one command whenever you w
 ```
 
 That's it. No database to provision, no object store to wire up, no identity provider
-to register with. qurator starts with SQLite as its metadata store and the local
-filesystem as its blob store, both created on first run, and serves on `:8080`.
+to register with, no secret to invent. qurator starts with SQLite as its metadata store
+and the local filesystem as its blob store, both created on first run, generates a random
+credential signing secret into `data/signing.key` (mode `0600`) and reuses it on every
+later start, and serves on `:8080`.
+
+Everything the instance needs lives under `./data`: the database, the blobs, and
+`signing.key`. Back them up together — restoring the database without the key signs
+every user out. If you would rather manage the secret yourself, set
+`QURATOR_AUTH_SIGNING_SECRET` and the file is never created; if the data directory
+(`QURATOR_SERVER_DATA_DIR`) can't be written and no secret is set, qurator refuses to
+start rather than run with a guessable key.
 
 ```bash
 curl -fsS localhost:8080/healthz   # 200 once the process is up

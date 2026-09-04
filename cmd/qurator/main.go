@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -105,6 +106,24 @@ func run(ctx context.Context, args []string, lookupEnv func(string) (string, boo
 	logger := observability.NewLogger(cfg.Log.Level, cfg.Log.Format, os.Stderr)
 	slog.SetDefault(logger)
 	slog.Info("starting", "version", version, "db_driver", cfg.DB.Driver, "blob_driver", cfg.Blob.Driver, "dev_mode", cfg.Auth.DevMode)
+
+	// FR-040: with no configured signing secret and dev mode off, generate one on
+	// first start and persist it under the data dir so sessions survive restarts.
+	// Refuse to start only if that file can neither be read nor created. Dev mode
+	// keeps its ephemeral key (auth.New). The value is never logged.
+	if !cfg.Auth.SigningSecret.IsSet() && !cfg.Auth.DevMode {
+		keyPath := filepath.Join(cfg.Server.DataDir, auth.SigningKeyFile)
+		secret, created, err := auth.LoadOrCreateSigningSecret(keyPath)
+		if err != nil {
+			return err
+		}
+		cfg.Auth.SigningSecret = secret
+		if created {
+			slog.Info("generated signing secret", "path", keyPath)
+		} else if auth.SigningSecretFilePermissive(keyPath) {
+			slog.Warn("signing secret file is readable by group or others; chmod 0600 it", "path", keyPath)
+		}
+	}
 
 	st, err := store.Open(ctx, cfg.DB.Driver, cfg.DB.DSN)
 	if err != nil {
@@ -212,6 +231,10 @@ func run(ctx context.Context, args []string, lookupEnv func(string) (string, boo
 		},
 		Auth: authn.Middleware,
 		CSRF: middleware.CSRF(auth.Method),
+		// 10 sign-in attempts per minute per TCP peer. Behind a reverse proxy every
+		// request shares the proxy's peer address, so this is effectively a global
+		// limit: qurator never trusts X-Forwarded-For (research.md §2).
+		SigninLimiter: middleware.NewRateLimiter(10).Middleware,
 	})
 
 	srv := &http.Server{

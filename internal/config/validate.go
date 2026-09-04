@@ -19,12 +19,15 @@ var (
 func (c *Config) Validate() error {
 	var errs []error
 
-	// FR-040: refuse to start with no signing secret unless dev mode is
-	// explicitly on.
-	if !c.Auth.SigningSecret.IsSet() && !c.Auth.DevMode {
-		errs = append(errs, fmt.Errorf(
-			"config: auth.signing_secret is empty and auth.dev_mode is false: "+
-				"set QURATOR_AUTH_SIGNING_SECRET or explicitly enable QURATOR_AUTH_DEV_MODE=true"))
+	// FR-040: an empty auth.signing_secret is NOT a validation error. When
+	// dev mode is off the binary generates one and persists it under
+	// server.data_dir (see auth.LoadOrCreateSigningSecret); it refuses to
+	// start only if that file can neither be read nor created. The data
+	// dir itself must be named so that path is well-defined.
+	if !c.Auth.DevMode && !c.Auth.SigningSecret.IsSet() && c.Server.DataDir == "" {
+		errs = append(errs, errors.New(
+			"config: server.data_dir is empty and auth.signing_secret is not set: "+
+				"set QURATOR_SERVER_DATA_DIR (where signing.key is persisted) or QURATOR_AUTH_SIGNING_SECRET"))
 	}
 
 	// Fail closed: forward-auth with no trusted CIDRs would trust the

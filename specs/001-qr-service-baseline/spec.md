@@ -4,7 +4,7 @@
 
 **Created**: 2026-09-04
 
-**Status**: Draft
+**Status**: Implemented (pending T109–T111 validation and release)
 
 **Input**: User description: "qurator — an open-source, self-hostable QR code service. Baseline v1 specification covering the full product: ephemeral generation, dynamic QR codes with editable destinations and optional custom aliases, redirects, scan analytics, styling and branding, unified token-based authentication with a forward-auth escape hatch, a REST API, and a minimal embedded web console. Pluggable metadata and blob storage, embedded defaults, no required external services."
 
@@ -264,9 +264,10 @@ export all data and confirm the export contains every code, destination, and agg
 - **Alias case and homoglyph confusion**: two aliases differing only by letter case, or by
   visually similar characters — uniqueness must be enforced case-insensitively over a
   restricted character set.
-- **Destination loop**: a destination points back at the instance's own scan address,
-  directly or via a chain — must be detected and refused rather than creating a redirect
-  loop.
+- **Destination loop**: a destination points back at the instance's own scan address —
+  must be detected after URL normalisation and refused. A loop through a third-party
+  host that later redirects here is out of scope for v1: detecting it would require
+  fetching external URLs at write time, an outbound request FR-056 deliberately avoids.
 - **Hostile destination**: a destination uses a scheme capable of executing in a scanner's
   browser, or is changed to a hostile target after creation — only permitted schemes are
   ever accepted, on create and on every update.
@@ -309,15 +310,19 @@ export all data and confirm the export contains every code, destination, and agg
   oversized payloads with an error naming the limit.
 - **FR-006**: System MUST require a valid credential for ephemeral generation by default,
   and MUST provide an explicit opt-in setting that permits unauthenticated access subject
-  to a configurable rate limit.
+  to a configurable rate limit keyed by the connecting network peer. Because the system
+  never trusts forwarded-address headers, an instance behind a reverse proxy sees one peer
+  and the limit is effectively instance-wide; operators needing per-client limits enforce
+  them at the proxy.
 
 **Dynamic codes and redirects**
 
 - **FR-007**: Users MUST be able to create a dynamic code with a destination, receiving a
   short code and a scannable image whose encoded value is the instance's scan address for
   that short code.
-- **FR-008**: Users MUST be able to list, read, update the destination of, disable, and
-  delete their dynamic codes.
+- **FR-008**: Users MUST be able to list, read, update the destination of, disable,
+  re-enable, and delete their dynamic codes. Deletion is terminal; a deleted code's
+  short code stays reserved (FR-018).
 - **FR-009**: System MUST resolve a scan of a short code to that code's current destination
   and issue a redirect, without requiring any credential.
 - **FR-010**: System MUST NOT alter the encoded value or stored image of a code when its
@@ -336,7 +341,8 @@ export all data and confirm the export contains every code, destination, and agg
 - **FR-016**: System MUST paginate list results and support filtering by creation time and
   by destination.
 - **FR-017**: System MUST resolve a scan using at most one metadata lookup, and MUST serve
-  repeat scans of the same code from an in-process cache with a bounded staleness window.
+  repeat scans of the same code from an in-process cache whose staleness never exceeds 60
+  seconds (so SC-008 holds even when explicit invalidation cannot reach the cache).
 - **FR-018**: Users MUST be able to supply a custom alias in place of a generated short
   code when creating a dynamic code. The system MUST:
   - accept an alias only if it is unique across all codes, comparing case-insensitively;
@@ -352,7 +358,8 @@ export all data and confirm the export contains every code, destination, and agg
 **Analytics**
 
 - **FR-019**: System MUST record a scan event for every successful redirect, capturing
-  timestamp, user agent family, device category, and referrer.
+  timestamp, user agent family, device category, and referrer host (never the full
+  referrer URL, whose path and query routinely carry third-party secrets).
 - **FR-020**: System MUST record scan events asynchronously, off the request path, so that
   a slow, failing, or saturated analytics writer never delays or fails a redirect.
 - **FR-021**: System MUST discard scan events when its buffer is full and MUST expose a
@@ -406,8 +413,10 @@ export all data and confirm the export contains every code, destination, and agg
 - **FR-038**: System MUST refuse a request carrying conflicting identity assertions.
 - **FR-039**: System MUST NOT provide account federation, self-service registration, or
   password reset flows.
-- **FR-040**: System MUST refuse to start when no credential signing secret is configured
-  and development mode has not been explicitly enabled.
+- **FR-040**: System MUST generate and persist a random credential signing secret on
+  first start when none is configured, MUST reuse it on later starts, and MUST refuse to
+  start when none is configured and none can be persisted, unless development mode is
+  explicitly enabled.
 
 **Interfaces**
 
@@ -441,7 +450,8 @@ export all data and confirm the export contains every code, destination, and agg
 - **FR-053**: System MUST, on a shutdown signal, stop accepting new work, complete
   in-flight requests, flush buffered scan events, and exit cleanly.
 - **FR-054**: System MUST apply schema migrations automatically at startup for either
-  supported relational backend, from one shared migration set.
+  supported relational backend, from one ordered migration sequence (a migration MAY
+  branch its statements per dialect, but there is exactly one version ordering).
 - **FR-055**: System MUST provide a documented, scriptable export of all codes,
   destinations, styling, and scan aggregates in a machine-readable format.
 - **FR-056**: System MUST NOT transmit any telemetry, usage report, or version check to any
@@ -457,7 +467,7 @@ export all data and confirm the export contains every code, destination, and agg
   last-used time, revocation time. The secret itself exists only at the moment of creation.
 - **Dynamic Code**: A persisted, scannable code with a mutable destination. Attributes:
   short code — system-generated or a user-supplied alias, unique case-insensitively and
-  immutable once set — owner, current destination, permitted state (active or disabled),
+  immutable once set — owner, current destination, permitted state (active, disabled, or deleted — deleted is terminal),
   styling profile, blob reference for its rendered image, creation and update times. Owns
   many scan events.
 - **Styling Profile**: The visual configuration of a rendered code. Attributes: foreground
