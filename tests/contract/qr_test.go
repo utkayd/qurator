@@ -59,7 +59,7 @@ func errorCode(t *testing.T, rec *httptest.ResponseRecorder) string {
 	return string(body.Error.Code)
 }
 
-func get(h http.Handler, q url.Values) *httptest.ResponseRecorder {
+func getQR(h http.Handler, q url.Values) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(http.MethodGet, "/v1/qr?"+q.Encode(), nil)
 	req.RemoteAddr = "203.0.113.7:4242"
 	rec := httptest.NewRecorder()
@@ -79,7 +79,7 @@ func post(h http.Handler, body any) *httptest.ResponseRecorder {
 
 func TestQR_PNGContentType(t *testing.T) {
 	h := newHandler(t, false, true, nil)
-	rec := get(h, url.Values{"content": {"hello"}, "format": {"png"}})
+	rec := getQR(h, url.Values{"content": {"hello"}, "format": {"png"}})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
 	}
@@ -121,7 +121,7 @@ func TestQR_SVGContentType(t *testing.T) {
 
 func TestQR_DefaultFormatIsPNG(t *testing.T) {
 	h := newHandler(t, false, true, nil)
-	rec := get(h, url.Values{"content": {"hello"}})
+	rec := getQR(h, url.Values{"content": {"hello"}})
 	if rec.Code != http.StatusOK || rec.Header().Get("Content-Type") != "image/png" {
 		t.Fatalf("status = %d, Content-Type = %q", rec.Code, rec.Header().Get("Content-Type"))
 	}
@@ -145,7 +145,7 @@ func TestQR_ContentTooLarge(t *testing.T) {
 
 func TestQR_UnauthorizedByDefault(t *testing.T) {
 	h := newHandler(t, false, false, nil)
-	rec := get(h, url.Values{"content": {"hello"}})
+	rec := getQR(h, url.Values{"content": {"hello"}})
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want 401; body = %s", rec.Code, rec.Body.String())
 	}
@@ -156,7 +156,7 @@ func TestQR_UnauthorizedByDefault(t *testing.T) {
 
 func TestQR_PublicAllowsAnonymous(t *testing.T) {
 	h := newHandler(t, true, false, (&fakeLimiter{burst: 100}).wrap)
-	rec := get(h, url.Values{"content": {"hello"}})
+	rec := getQR(h, url.Values{"content": {"hello"}})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body = %s", rec.Code, rec.Body.String())
 	}
@@ -165,11 +165,11 @@ func TestQR_PublicAllowsAnonymous(t *testing.T) {
 func TestQR_RateLimitedWhenPublic(t *testing.T) {
 	h := newHandler(t, true, false, (&fakeLimiter{burst: 3}).wrap)
 	for i := 0; i < 3; i++ {
-		if rec := get(h, url.Values{"content": {"hello"}}); rec.Code != http.StatusOK {
+		if rec := getQR(h, url.Values{"content": {"hello"}}); rec.Code != http.StatusOK {
 			t.Fatalf("request %d: status = %d", i, rec.Code)
 		}
 	}
-	rec := get(h, url.Values{"content": {"hello"}})
+	rec := getQR(h, url.Values{"content": {"hello"}})
 	if rec.Code != http.StatusTooManyRequests {
 		t.Fatalf("status = %d, want 429", rec.Code)
 	}
@@ -184,7 +184,7 @@ func TestQR_RateLimitedWhenPublic(t *testing.T) {
 func TestQR_LimiterNotAppliedWhenPrivate(t *testing.T) {
 	lim := &fakeLimiter{burst: 0}
 	h := newHandler(t, false, true, lim.wrap)
-	if rec := get(h, url.Values{"content": {"hello"}}); rec.Code != http.StatusOK {
+	if rec := getQR(h, url.Values{"content": {"hello"}}); rec.Code != http.StatusOK {
 		t.Fatalf("private instance must not rate-limit authenticated callers: status = %d", rec.Code)
 	}
 }
@@ -192,8 +192,8 @@ func TestQR_LimiterNotAppliedWhenPrivate(t *testing.T) {
 func TestQR_ByteIdenticalForIdenticalParams(t *testing.T) {
 	h := newHandler(t, false, true, nil)
 	q := url.Values{"content": {"same"}, "format": {"png"}, "size_px": {"300"}, "ec_level": {"Q"}}
-	a := get(h, q)
-	b := get(h, q)
+	a := getQR(h, q)
+	b := getQR(h, q)
 	if a.Code != http.StatusOK || b.Code != http.StatusOK {
 		t.Fatalf("status = %d / %d", a.Code, b.Code)
 	}
@@ -212,7 +212,7 @@ func TestQR_ByteIdenticalForIdenticalParams(t *testing.T) {
 
 func TestQR_IfNoneMatch(t *testing.T) {
 	h := newHandler(t, false, true, nil)
-	first := get(h, url.Values{"content": {"cached"}})
+	first := getQR(h, url.Values{"content": {"cached"}})
 	etag := first.Header().Get("ETag")
 	req := httptest.NewRequest(http.MethodGet, "/v1/qr?content=cached", nil)
 	req.Header.Set("If-None-Match", etag)
@@ -238,7 +238,7 @@ func TestQR_InvalidParams(t *testing.T) {
 		{"content": {"x"}, "module_shape": {"hexagon"}},
 	}
 	for _, q := range cases {
-		rec := get(h, q)
+		rec := getQR(h, q)
 		if rec.Code != http.StatusBadRequest {
 			t.Errorf("%v: status = %d, want 400", q, rec.Code)
 			continue
@@ -251,7 +251,7 @@ func TestQR_InvalidParams(t *testing.T) {
 
 func TestQR_DimensionsExceeded(t *testing.T) {
 	h := newHandler(t, false, true, nil) // MaxPx 1024
-	rec := get(h, url.Values{"content": {"x"}, "size_px": {"2048"}})
+	rec := getQR(h, url.Values{"content": {"x"}, "size_px": {"2048"}})
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400; body = %s", rec.Code, rec.Body.String())
 	}
@@ -304,7 +304,7 @@ func TestQR_StylingShapesDecode(t *testing.T) {
 
 func TestQR_ContrastTooLow(t *testing.T) {
 	h := newHandler(t, false, true, nil)
-	rec := get(h, url.Values{"content": {"x"}, "fg_color": {"#FEFEFE"}, "bg_color": {"#FFFFFF"}})
+	rec := getQR(h, url.Values{"content": {"x"}, "fg_color": {"#FEFEFE"}, "bg_color": {"#FFFFFF"}})
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
 	}

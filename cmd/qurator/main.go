@@ -25,6 +25,7 @@ import (
 	"github.com/utkayd/qurator/internal/httpapi/public"
 	v1 "github.com/utkayd/qurator/internal/httpapi/v1"
 	"github.com/utkayd/qurator/internal/observability"
+	"github.com/utkayd/qurator/internal/qr"
 	"github.com/utkayd/qurator/internal/store"
 
 	// Driver registration: importing a driver package opts the binary into it.
@@ -47,15 +48,25 @@ type Flusher interface {
 	Close(ctx context.Context) error
 }
 
-// renderer returns the QR renderer used for persisted codes. Stream A replaces this
-// with internal/qr; until then creating a dynamic code fails loudly rather than
-// silently storing an empty image.
-func renderer() codes.Renderer { return pendingRenderer{} }
+// codesRenderer adapts internal/qr to the narrow codes.Renderer interface: the
+// persisted PNG for a dynamic code, rendered with the code's stored styling.
+type codesRenderer struct{ r *qr.Renderer }
 
-type pendingRenderer struct{}
-
-func (pendingRenderer) Render(context.Context, string, domain.Styling) ([]byte, error) {
-	return nil, errors.New("qr renderer not wired (Stream A pending)")
+func (c codesRenderer) Render(ctx context.Context, content string, s domain.Styling) ([]byte, error) {
+	res, err := c.r.Render(ctx, qr.Options{
+		Content: []byte(content),
+		Format:  qr.FormatPNG,
+		FgColor: s.FgColor,
+		BgColor: s.BgColor,
+		Shape:   qr.ModuleShape(s.ModuleShape),
+		Margin:  s.MarginModules,
+		SizePx:  s.SizePx,
+		ECLevel: qr.ECLevel(s.ECLevel),
+	})
+	if err != nil {
+		return nil, err
+	}
+	return res.Bytes, nil
 }
 
 func main() {
@@ -72,6 +83,14 @@ func run(ctx context.Context, args []string, lookupEnv func(string) (string, boo
 		if a == "--version" || a == "-v" {
 			fmt.Fprintln(stdout, "qurator", version)
 			return nil
+		}
+	}
+	if len(args) > 0 {
+		switch args[0] {
+		case "export":
+			return runExport(ctx, args[1:], lookupEnv, stdout)
+		case "import":
+			return runImport(ctx, args[1:], lookupEnv, stdout)
 		}
 	}
 
@@ -138,8 +157,20 @@ func run(ctx context.Context, args []string, lookupEnv func(string) (string, boo
 	go analytics.NewRetention(st, cfg.Analytics.RetentionDays, 1000).Run(ctx)
 	classifier := analytics.NewClassifier()
 
-	// Dynamic codes (Stream B). The renderer arrives with Stream A.
-	codeSvc := codes.NewService(st, bs, renderer(), codes.NewCache(), codes.Config{
+	// QR rendering (Stream A): shared by the ephemeral endpoint and persisted codes.
+	qrRenderer := qr.NewRenderer(qr.Bounds{
+		MaxPx:       cfg.Render.MaxPx,
+		MaxDuration: cfg.Render.MaxDuration,
+		MaxPayload:  cfg.Render.MaxPayloadBytes,
+	})
+	ephemeralLimiter := middleware.NewRateLimiter(cfg.Ephemeral.RateLimitPerMinute).Middleware
+	isAdmin := func(r *http.Request) bool {
+		id, ok := auth.IdentityFrom(r.Context())
+		return ok && id.IsAdmin
+	}
+
+	// Dynamic codes (Stream B).
+	codeSvc := codes.NewService(st, bs, codesRenderer{qrRenderer}, codes.NewCache(), codes.Config{
 		BaseURL:        cfg.Server.BaseURL,
 		AllowedSchemes: cfg.Codes.AllowedSchemes,
 	})
@@ -155,13 +186,13 @@ func run(ctx context.Context, args []string, lookupEnv func(string) (string, boo
 				return c.UAFamily, c.DeviceCategory, c.IsBot
 			},
 		}),
-		QR:        v1.NewQRHandler(),
+		QR:        v1.NewQRHandler(qrRenderer, cfg.Ephemeral, auth.IsAuthenticated, ephemeralLimiter),
 		Codes:     v1.NewCodesHandler(codeSvc, identity),
 		Auth:      v1.NewAuthHandler(authn, st),
 		Tokens:    v1.NewTokensHandler(authn, st),
 		Admin:     v1.NewAdminHandler(st),
 		Analytics: v1.NewAnalyticsHandler(st, identity),
-		Export:    v1.NewExportHandler(),
+		Export:    v1.NewExportHandler(st, isAdmin),
 		Console:   console.New(newConsoleDeps(codeSvc, authn, st)),
 		Healthz:   observability.Healthz(),
 		Readyz:    observability.Readyz(map[string]observability.Pinger{"store": st, "blob": bs}, 2*time.Second),
