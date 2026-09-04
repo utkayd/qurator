@@ -1,0 +1,283 @@
+/* qurator console — minimal, semantic, no external fonts or icons. */
+
+:root {
+  color-scheme: light dark;
+  --bg: #ffffff;
+  --bg-raised: #f5f6f8;
+  --fg: #101828;
+  --fg-muted: #475467;
+  --border: #d0d5dd;
+  --accent: #155eef;
+  --accent-fg: #ffffff;
+  --danger: #b42318;
+  --danger-bg: #fef3f2;
+  --focus: #155eef;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0d1117;
+    --bg-raised: #161b22;
+    --fg: #e6edf3;
+    --fg-muted: #9aa7b6;
+    --border: #30363d;
+    --accent: #4c8dff;
+    --accent-fg: #0d1117;
+    --danger: #ff7a6e;
+    --danger-bg: #2a1210;
+    --focus: #4c8dff;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  line-height: 1.5;
+}
+
+a {
+  color: var(--accent);
+}
+
+.skip-link {
+  position: absolute;
+  left: -999px;
+  top: 0;
+}
+.skip-link:focus {
+  left: 0.5rem;
+  top: 0.5rem;
+  background: var(--bg-raised);
+  padding: 0.5rem 1rem;
+  z-index: 10;
+}
+
+header.site {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1rem 1.5rem;
+  border-bottom: 1px solid var(--border);
+}
+
+header.site nav {
+  display: flex;
+  gap: 1rem;
+}
+
+main {
+  max-width: 72rem;
+  margin: 0 auto;
+  padding: 1.5rem;
+}
+
+h1,
+h2,
+h3 {
+  line-height: 1.25;
+}
+
+.card {
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  padding: 1.25rem;
+  margin-bottom: 1.25rem;
+}
+
+form.stack {
+  display: grid;
+  gap: 1rem;
+  max-width: 32rem;
+}
+
+.field {
+  display: grid;
+  gap: 0.25rem;
+}
+
+label {
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+input,
+select,
+textarea,
+button {
+  font: inherit;
+}
+
+input,
+select,
+textarea {
+  padding: 0.5rem 0.65rem;
+  border: 1px solid var(--border);
+  border-radius: 0.375rem;
+  background: var(--bg);
+  color: var(--fg);
+}
+
+input[type="color"] {
+  padding: 0.15rem;
+  height: 2.25rem;
+  width: 4rem;
+}
+
+:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+button {
+  cursor: pointer;
+  border: 1px solid var(--border);
+  border-radius: 0.375rem;
+  padding: 0.55rem 1rem;
+  background: var(--bg-raised);
+  color: var(--fg);
+}
+
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-fg);
+}
+
+button.danger {
+  background: var(--danger-bg);
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.help {
+  color: var(--fg-muted);
+  font-size: 0.85rem;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+th,
+td {
+  text-align: left;
+  padding: 0.5rem 0.6rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.preview {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 1rem;
+  border: 1px dashed var(--border);
+  border-radius: 0.5rem;
+}
+
+.preview img {
+  max-width: 16rem;
+  max-height: 16rem;
+  background: #fff;
+  border-radius: 0.25rem;
+}
+
+.two-col {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1.5rem;
+}
+
+@media (max-width: 48rem) {
+  .two-col {
+    grid-template-columns: 1fr;
+  }
+}
+
+.secret-box {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 0.375rem;
+  padding: 0.75rem;
+  word-break: break-all;
+}
+
+dialog[data-confirm-dialog] {
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  background: var(--bg);
+  color: var(--fg);
+  padding: 1.25rem;
+  max-width: 28rem;
+}
+
+dialog[data-confirm-dialog]::backdrop {
+  background: rgba(0, 0, 0, 0.4);
+}
+
+.dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  margin-top: 1rem;
+}
+
+.chart {
+  width: 100%;
+  height: auto;
+}
+
+.chart .axis {
+  stroke: var(--border);
+  stroke-width: 1;
+}
+
+.chart .line {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 2;
+}
+
+.chart .point {
+  fill: var(--accent);
+}
+
+.badge {
+  display: inline-block;
+  padding: 0.15rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  border: 1px solid var(--border);
+}
+
+.badge.active {
+  color: #067647;
+  border-color: #067647;
+}
+
+.badge.disabled {
+  color: var(--fg-muted);
+}
+
+.error-banner {
+  background: var(--danger-bg);
+  color: var(--danger);
+  border: 1px solid var(--danger);
+  border-radius: 0.375rem;
+  padding: 0.75rem 1rem;
+  margin-bottom: 1rem;
+}

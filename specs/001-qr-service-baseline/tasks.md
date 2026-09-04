@@ -294,16 +294,16 @@ network blocked (quickstart Scenario / US6).
 
 ### Tests for User Story 6 (REQUIRED for contract surfaces — see Principle VII) ⚠️
 
-- [ ] T088 [P] [US6] (Stream E) Write `internal/console/csp_test.go` — every console response carries the exact CSP from research §5 with a fresh nonce; every `<script>`/`<style>` in rendered HTML carries that nonce; no `unsafe-inline`/`unsafe-eval`; no `hx-on:` attribute anywhere in templates (grep the embedded FS)
-- [ ] T089 [P] [US6] (Stream E) Write `internal/console/offline_test.go` — walk every embedded HTML/CSS/JS asset and assert no `http://`/`https://` URL to a non-self origin (FR-043)
-- [ ] T090 [P] [US6] (Stream E) Write `tests/e2e/console_test.go` using `net/http/cookiejar` + `golang.org/x/net/html`: sign in → create styled code → list shows it → edit destination → analytics page renders SVG chart → create token (secret shown once, absent on reload) → revoke → delete with confirmation text mentioning printed codes
+- [x] T088 [P] [US6] (Stream E) Write `internal/console/csp_test.go` — every console response carries the exact CSP from research §5 with a fresh nonce; every `<script>`/`<style>` in rendered HTML carries that nonce; no `unsafe-inline`/`unsafe-eval`; no `hx-on:` attribute anywhere in templates (grep the embedded FS)
+- [x] T089 [P] [US6] (Stream E) Write `internal/console/offline_test.go` — walk every embedded HTML/CSS/JS asset and assert no `http://`/`https://` URL to a non-self origin (FR-043)
+- [x] T090 [P] [US6] (Stream E) Write `tests/e2e/console_test.go` using `net/http/cookiejar` + `golang.org/x/net/html`: sign in → create styled code → list shows it → edit destination → analytics page renders SVG chart → create token (secret shown once, absent on reload) → revoke → delete with confirmation text mentioning printed codes
 
 ### Implementation for User Story 6
 
-- [ ] T091 [US6] (Stream E) Create `internal/console/assets/` with vendored `htmx.min.js` (pinned version, licence file), `app.js` (debounced 150ms live preview calling `/v1/qr` with `AbortController`, memo cache, show-once token copy with clipboard API and DOM removal), `app.css` (light + `prefers-color-scheme: dark`), all under `//go:embed`; serve with fingerprinted paths + `Cache-Control: immutable` and pre-gzipped variants
-- [ ] T092 [US6] (Stream E) Create `internal/console/templates/` — `layout.html` (nonce injection), `signin.html`, `codes_list.html`, `code_new.html` (styling controls + preview `<img>`), `code_detail.html` (download, edit destination via htmx `hx-patch` with `If-Match`, analytics SVG chart, delete with confirmation stating printed-code consequence), `tokens.html`
-- [ ] T093 [US6] (Stream E) Implement `internal/console/handler.go` — routes under `/ui/`, per-request nonce, `X-Qurator-Requested-With` injected by htmx config (`htmx.config.headers`), calls the same service layer as the API (never duplicates validation), and `internal/console/chart.go` rendering the trend as inline SVG in Go
-- [ ] T094 [US6] (Stream E) Run T088–T090 green, `make lint`; commit on `stream/e-console`
+- [x] T091 [US6] (Stream E) Create `internal/console/assets/` with vendored `htmx.min.js` (pinned version, licence file), `app.js` (debounced 150ms live preview calling `/v1/qr` with `AbortController`, memo cache, show-once token copy with clipboard API and DOM removal), `app.css` (light + `prefers-color-scheme: dark`), all under `//go:embed`; serve with fingerprinted paths + `Cache-Control: immutable` and pre-gzipped variants
+- [x] T092 [US6] (Stream E) Create `internal/console/templates/` — `layout.html` (nonce injection), `signin.html`, `codes_list.html`, `code_new.html` (styling controls + preview `<img>`), `code_detail.html` (download, edit destination via htmx `hx-patch` with `If-Match`, analytics SVG chart, delete with confirmation stating printed-code consequence), `tokens.html`
+- [x] T093 [US6] (Stream E) Implement `internal/console/handler.go` — routes under `/ui/`, per-request nonce, `X-Qurator-Requested-With` injected by htmx config (`htmx.config.headers`), calls the same service layer as the API (never duplicates validation), and `internal/console/chart.go` rendering the trend as inline SVG in Go
+- [x] T094 [US6] (Stream E) Run T088–T090 green, `make lint`; commit on `stream/e-console`
 
 ---
 
