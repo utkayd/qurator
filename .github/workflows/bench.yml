@@ -48,17 +48,21 @@ jobs:
           cat benchstat.txt >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Fail on any non-~ positive delta
+      - name: Fail on significant regressions of 5% or more
         run: |
-          # benchstat marks a comparison "~" when the change is not statistically
-          # significant. Any other delta column value that is a positive percentage
-          # (a regression: slower or more allocations/bytes) fails the job — a negative
-          # delta (an improvement) or "~" is fine.
-          # Only per-benchmark rows count: benchstat prints "(p=0.xxx n=N)" next to a
-          # significant delta and "~" otherwise, while geomean summary lines always show a
-          # raw percentage and must be ignored.
-          if grep -v geomean benchstat.txt | grep -E '\+[0-9]+(\.[0-9]+)?%.*\(p='; then
-            echo "::error::Statistically significant regression detected — see the lines above."
-            exit 1
-          fi
-          echo "No significant regression."
+          # benchstat prints "~" when a change is not statistically significant and a
+          # percentage with "(p=...)" when it is. On stable runners a 0.2% change can be
+          # significant at n=10, so significance alone is not a regression: this gate fails
+          # only on significant slowdowns/growth of >= 5% and warns on smaller ones.
+          # geomean summary lines never carry the marker and are ignored.
+          fail=0
+          while IFS= read -r line; do
+            pct=$(echo "$line" | grep -oE '\+[0-9]+(\.[0-9]+)?%' | head -1 | tr -d '+%')
+            if [ -n "$pct" ] && awk -v p="$pct" 'BEGIN{exit !(p>=5)}'; then
+              echo "::error::Regression >= 5%: $line"; fail=1
+            elif [ -n "$pct" ]; then
+              echo "::warning::Small significant delta (< 5%): $line"
+            fi
+          done < <(grep -v geomean benchstat.txt | grep -E '\+[0-9]+(\.[0-9]+)?%.*\(p=' || true)
+          [ "$fail" -eq 0 ] && echo "No regression >= 5%."
+          exit $fail
