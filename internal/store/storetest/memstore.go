@@ -270,6 +270,9 @@ func (m *memStore) CreateCode(ctx context.Context, c *domain.Code) error {
 	if cp.State == "" {
 		cp.State = domain.CodeActive
 	}
+	if cp.Mode == "" {
+		cp.Mode = domain.ModeDynamic
+	}
 	cp.Version = 1
 	cp.DeletedAt = nil
 
@@ -281,6 +284,7 @@ func (m *memStore) CreateCode(ctx context.Context, c *domain.Code) error {
 	c.ShortCode = cp.ShortCode
 	c.Version = cp.Version
 	c.State = cp.State
+	c.Mode = cp.Mode
 	c.CreatedAt = cp.CreatedAt
 	c.UpdatedAt = cp.UpdatedAt
 	return nil

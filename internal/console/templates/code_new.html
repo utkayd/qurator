@@ -3,6 +3,19 @@
 {{if .Error}}<p class="error-banner" role="alert">{{.Error}}</p>{{end}}
 <div class="two-col">
   <form class="stack" data-preview-form hx-post="/ui/codes" hx-target="body" hx-swap="outerHTML">
+    <div class="field" data-mode-field>
+      <label>Mode</label>
+      <label class="radio-option">
+        <input type="radio" name="mode" value="dynamic" {{if ne .Mode "direct"}}checked{{end}}>
+        Dynamic (recommended)
+      </label>
+      <p class="help">Scans pass through this instance, so you can change the destination later and see scan analytics.</p>
+      <label class="radio-option">
+        <input type="radio" name="mode" value="direct" {{if eq .Mode "direct"}}checked{{end}}>
+        Direct
+      </label>
+      <p class="help">The destination is printed into the image and cannot be changed later. Scans go straight to the destination and are not counted.</p>
+    </div>
     <div class="field">
       <label for="destination">Destination URL</label>
       <input type="url" id="destination" name="destination" required value="{{.Destination}}"
@@ -59,7 +72,7 @@
     <h2>Live preview</h2>
     <img data-preview-image src="" alt="Live QR code preview" width="256" height="256">
     <p data-preview-status class="help" aria-live="polite"></p>
-    <p class="help">The preview renders with today's destination text; the printed code always encodes this instance's own scan address so it keeps working even after the destination changes.</p>
+    <p class="help">{{if eq .Mode "direct"}}Direct mode: the printed code encodes the destination itself.{{else}}The preview renders with today's destination text; the printed code always encodes this instance's own scan address so it keeps working even after the destination changes.{{end}}</p>
   </div>
 </div>
 {{end}}

@@ -128,6 +128,10 @@ func importCodes(ctx context.Context, st store.Store, r io.Reader, codeIDs map[s
 		if err := json.Unmarshal(line, &c); err != nil {
 			return fmt.Errorf("export: decode code row: %w", err)
 		}
+		// Archives written before spec 002 carry no mode; every code then was dynamic.
+		if c.Mode == "" {
+			c.Mode = domain.ModeDynamic
+		}
 		deleted := c.State == domain.CodeDeleted
 		if deleted {
 			c.State = domain.CodeDisabled

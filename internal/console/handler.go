@@ -245,6 +245,7 @@ func (h *Handler) getCodesList(w http.ResponseWriter, r *http.Request) {
 type codeNewData struct {
 	Destination   string
 	Alias         string
+	Mode          string
 	Format        string
 	FgColor       string
 	BgColor       string
@@ -257,6 +258,7 @@ type codeNewData struct {
 
 func defaultCodeNewData() codeNewData {
 	return codeNewData{
+		Mode:          modeDynamic,
 		Format:        "png",
 		FgColor:       "#101828",
 		BgColor:       "#FFFFFF",
@@ -281,6 +283,9 @@ func (h *Handler) postCodeCreate(w http.ResponseWriter, r *http.Request) {
 	data := defaultCodeNewData()
 	data.Destination = strings.TrimSpace(r.FormValue("destination"))
 	data.Alias = strings.TrimSpace(r.FormValue("alias"))
+	if v := r.FormValue("mode"); v != "" {
+		data.Mode = v
+	}
 	if v := r.FormValue("format"); v != "" {
 		data.Format = v
 	}
@@ -307,9 +312,16 @@ func (h *Handler) postCodeCreate(w http.ResponseWriter, r *http.Request) {
 		data.ECLevel = v
 	}
 
+	if data.Mode != modeDynamic && data.Mode != modeDirect {
+		data.Error = safeErrorMessage(fmt.Errorf("%w: unknown mode %q", ErrValidation, data.Mode), "Could not create the code.")
+		h.render(w, r, http.StatusBadRequest, "code_new.html", "New code", data)
+		return
+	}
+
 	in := CreateCodeInput{
 		Destination: data.Destination,
 		Alias:       data.Alias,
+		Mode:        data.Mode,
 		Styling: StylingInput{
 			FgColor:       data.FgColor,
 			BgColor:       data.BgColor,
@@ -340,6 +352,7 @@ func (h *Handler) renderCodeNewError(w http.ResponseWriter, r *http.Request, msg
 type codeView struct {
 	domain.Code
 	ScanURL string
+	Mode    string
 }
 
 type codeDetailData struct {
@@ -364,7 +377,7 @@ func (h *Handler) getCodeDetail(w http.ResponseWriter, r *http.Request) {
 	to := time.Now().UTC()
 	from := to.AddDate(0, 0, -30)
 	var analytics *domain.AnalyticsResult
-	if h.deps.Analytics != nil {
+	if h.deps.Analytics != nil && codeMode(code) != modeDirect {
 		result, err := h.deps.Analytics.Get(r.Context(), user.ID, domain.AnalyticsQuery{
 			CodeID: id,
 			From:   from,
@@ -377,7 +390,7 @@ func (h *Handler) getCodeDetail(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.render(w, r, http.StatusOK, "code_detail.html", code.ShortCode, codeDetailData{
-		Code:      codeView{Code: code, ScanURL: "/r/" + code.ShortCode},
+		Code:      codeView{Code: code, ScanURL: "/r/" + code.ShortCode, Mode: codeMode(code)},
 		ImageURL:  "/i/" + code.ID + ".png",
 		Analytics: analytics,
 		From:      from.Format("2006-01-02"),

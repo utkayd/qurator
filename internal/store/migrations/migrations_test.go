@@ -145,4 +145,78 @@ func TestApplyPostgres(t *testing.T) {
 	if err := insertCode("cod_3", "SPRING-SALE", "disabled"); err == nil {
 		t.Fatal("second live row with the same short code (any case) must violate codes_short_code_ci")
 	}
+
+	// 0003: codes.mode exists, is NOT NULL, and defaults to 'dynamic' (FR-108).
+	var nullable, modeDefault string
+	if err := db.QueryRowContext(ctx, `SELECT is_nullable, column_default FROM information_schema.columns
+		WHERE table_schema = 'mig_test' AND table_name = 'codes' AND column_name = 'mode'`).Scan(&nullable, &modeDefault); err != nil {
+		t.Fatalf("codes.mode column: %v", err)
+	}
+	if nullable != "NO" || !strings.Contains(modeDefault, "dynamic") {
+		t.Fatalf("codes.mode nullable=%q default=%q, want NOT NULL DEFAULT 'dynamic'", nullable, modeDefault)
+	}
+	var mode string
+	if err := db.QueryRowContext(ctx, `SELECT mode FROM codes WHERE id = 'cod_2'`).Scan(&mode); err != nil || mode != "dynamic" {
+		t.Fatalf("row inserted without mode reads %q (err %v), want dynamic", mode, err)
+	}
+}
+
+// TestSQLiteModeBackfill pins migration 0003 (spec 002, FR-108): a code row that
+// existed before the mode column reads back as 'dynamic' — explicitly, via the
+// column's NOT NULL default — and a direct row round-trips.
+func TestSQLiteModeBackfill(t *testing.T) {
+	db, err := sql.Open("sqlite", "file:"+t.TempDir()+"/m.db?_pragma=foreign_keys(ON)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	ctx := context.Background()
+
+	// Apply only 0001 and 0002, insert a pre-feature row, then bring the schema to 0003.
+	if err := applyUpTo(ctx, db, SQLite, 2); err != nil {
+		t.Fatalf("apply up to 0002: %v", err)
+	}
+	mustExec := func(q string, args ...any) {
+		t.Helper()
+		if _, err := db.ExecContext(ctx, q, args...); err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+	}
+	mustExec(`INSERT INTO users(id,email,is_admin,token_version,source,created_at) VALUES('usr_1','a@x.com',0,0,'local','2026-01-01T00:00:00Z')`)
+	mustExec(`INSERT INTO styling_profiles(id,fg_color,bg_color,module_shape,margin_modules,size_px,ec_level,ec_level_effective) VALUES('sty_1','#000','#fff','square',4,256,'M','M')`)
+	mustExec(`INSERT INTO codes(id,short_code,is_alias,user_id,destination,state,styling_id,blob_key,blob_etag,version,created_at,updated_at)
+		VALUES('cod_old','old-code',1,'usr_1','https://x','active','sty_1','k','e',1,'2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')`)
+	var hasMode int
+	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM pragma_table_info('codes') WHERE name = 'mode'`).Scan(&hasMode); err != nil || hasMode != 0 {
+		t.Fatalf("codes.mode must not exist before 0003: n=%d err=%v", hasMode, err)
+	}
+
+	if err := Apply(ctx, db, SQLite); err != nil {
+		t.Fatalf("apply 0003: %v", err)
+	}
+	var version int64
+	if err := db.QueryRowContext(ctx, `SELECT max(version_id) FROM goose_db_version`).Scan(&version); err != nil || version < 3 {
+		t.Fatalf("schema version = %d (err %v), want >= 3", version, err)
+	}
+	var mode string
+	if err := db.QueryRowContext(ctx, `SELECT mode FROM codes WHERE id = 'cod_old'`).Scan(&mode); err != nil {
+		t.Fatal(err)
+	}
+	if mode != "dynamic" {
+		t.Fatalf("pre-0003 row mode = %q, want dynamic", mode)
+	}
+	// New rows: the default still applies when mode is omitted, and direct persists.
+	mustExec(`INSERT INTO codes(id,short_code,is_alias,user_id,destination,state,styling_id,blob_key,blob_etag,version,created_at,updated_at)
+		VALUES('cod_new','new-code',1,'usr_1','https://x','active','sty_1','k','e',1,'2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')`)
+	mustExec(`INSERT INTO codes(id,short_code,is_alias,user_id,mode,destination,state,styling_id,blob_key,blob_etag,version,created_at,updated_at)
+		VALUES('cod_direct','direct-code',1,'usr_1','direct','https://x','active','sty_1','k','e',1,'2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')`)
+	for id, want := range map[string]string{"cod_new": "dynamic", "cod_direct": "direct"} {
+		if err := db.QueryRowContext(ctx, `SELECT mode FROM codes WHERE id = ?`, id).Scan(&mode); err != nil || mode != want {
+			t.Fatalf("%s mode = %q (err %v), want %q", id, mode, err, want)
+		}
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO codes(id,short_code,is_alias,user_id,mode,destination,state,styling_id,blob_key,blob_etag,version,created_at,updated_at)
+		VALUES('cod_null','null-code',1,'usr_1',NULL,'https://x','active','sty_1','k','e',1,'2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')`); err == nil {
+		t.Fatal("NULL mode must be rejected: the column is NOT NULL so 'unknown mode' cannot exist")
+	}
 }

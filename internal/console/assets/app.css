@@ -273,6 +273,22 @@ dialog[data-confirm-dialog]::backdrop {
   color: var(--fg-muted);
 }
 
+.badge.mode-direct {
+  color: #7a4f01;
+  border-color: #7a4f01;
+}
+
+.badge.mode-dynamic {
+  color: var(--fg-muted);
+}
+
+.radio-option {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-weight: normal;
+}
+
 .error-banner {
   background: var(--danger-bg);
   color: var(--danger);

@@ -19,12 +19,12 @@ No new dependencies. Touches: `internal/domain` (CodeMode), migration 0003 (`cod
 No new packages. Migration `internal/store/migrations/0003_code_mode.go`.
 
 ## Tasks
-- [ ] T201 [P] Contract tests: `tests/contract/codes_test.go` — create with mode direct → image decodes to destination (PNG via real renderer + gozxing); default → dynamic, scan_url present; direct → no scan_url; PATCH/disable/enable → 409 `direct_code_immutable`; over-capacity destination at EC-H → 413 `content_too_large`; export includes mode
-- [ ] T202 [P] Contract tests: `tests/contract/analytics_test.go` — direct code → 400 `not_tracked`
-- [ ] T203 [P] Store contract: `storetest` Req14 mode persists and round-trips, defaults dynamic; memstore + sqlite + postgres
-- [ ] T204 Migration 0003 adding `mode` with default `'dynamic'` (both dialects) and backfilling existing rows
-- [ ] T205 `domain.CodeMode`, `Code.Mode`; `codes.Service`: content = destination for direct; capacity check; `ErrDirectImmutable` on UpdateDestination/SetState for direct
-- [ ] T206 `httpapi` error codes `direct_code_immutable` (409) and `not_tracked` (400); v1 codes + analytics handlers; OpenAPI + errors.md
-- [ ] T207 Export/import round-trips mode
-- [ ] T208 [P] Console: mode radio on create form with consequence text; detail page shows mode, hides edit/disable for direct, replaces analytics with explanation; e2e test
-- [ ] T209 Backend-parity matrix gains a direct-code step; full suite; lint; quickstart addendum
+- [x] T201 [P] Contract tests: `tests/contract/codes_test.go` — create with mode direct → image decodes to destination (PNG via real renderer + gozxing); default → dynamic, scan_url present; direct → no scan_url; PATCH/disable/enable → 409 `direct_code_immutable`; over-capacity destination at EC-H → 413 `content_too_large`; export includes mode
+- [x] T202 [P] Contract tests: `tests/contract/analytics_test.go` — direct code → 400 `not_tracked`
+- [x] T203 [P] Store contract: `storetest` Req14 mode persists and round-trips, defaults dynamic; memstore + sqlite + postgres
+- [x] T204 Migration 0003 adding `mode` with default `'dynamic'` (both dialects) and backfilling existing rows
+- [x] T205 `domain.CodeMode`, `Code.Mode`; `codes.Service`: content = destination for direct; capacity check; `ErrDirectImmutable` on UpdateDestination/SetState for direct
+- [x] T206 `httpapi` error codes `direct_code_immutable` (409) and `not_tracked` (400); v1 codes + analytics handlers; OpenAPI + errors.md
+- [x] T207 Export/import round-trips mode
+- [x] T208 [P] Console: mode radio on create form with consequence text; detail page shows mode, hides edit/disable for direct, replaces analytics with explanation; e2e test
+- [x] T209 Backend-parity matrix gains a direct-code step; full suite; lint; quickstart addendum

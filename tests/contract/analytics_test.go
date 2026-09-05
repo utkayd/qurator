@@ -374,3 +374,45 @@ func itoa(i int) string {
 	}
 	return string(buf[n:])
 }
+
+// TestAnalyticsDirectCodeNotTracked pins FR-105: analytics on a direct code is a stable
+// not_tracked refusal, never an empty aggregate that looks like "nobody scanned it".
+func TestAnalyticsDirectCodeNotTracked(t *testing.T) {
+	h, ms, base := analyticsFixture(t)
+	const directID = "cod_direct0000000001"
+	if err := ms.CreateCode(context.Background(), &domain.Code{ID: directID, ShortCode: "printed", UserID: ownerID, Destination: "https://example.com/p", Mode: domain.ModeDirect}); err != nil {
+		t.Fatal(err)
+	}
+	from, to := base.Format(time.RFC3339), base.Add(14*24*time.Hour).Format(time.RFC3339)
+	req := httptest.NewRequest(http.MethodGet, "/v1/codes/"+directID+"/analytics?from="+from+"&to="+to, nil)
+	req.Header.Set("X-Test-User", ownerID)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status %d: %s", rr.Code, rr.Body.Bytes())
+	}
+	var env struct {
+		Error struct {
+			Code    string         `json:"code"`
+			Message string         `json:"message"`
+			Details map[string]any `json:"details"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &env); err != nil {
+		t.Fatalf("decode: %v\n%s", err, rr.Body.Bytes())
+	}
+	if env.Error.Code != "not_tracked" || env.Error.Details["mode"] != "direct" {
+		t.Fatalf("want not_tracked with details.mode=direct, got %s", rr.Body.Bytes())
+	}
+	if strings.Contains(rr.Body.String(), `"total"`) {
+		t.Fatalf("not_tracked must not carry an aggregate: %s", rr.Body.Bytes())
+	}
+	// A stranger still gets 404 before any mode check leaks existence.
+	req = httptest.NewRequest(http.MethodGet, "/v1/codes/"+directID+"/analytics?from="+from+"&to="+to, nil)
+	req.Header.Set("X-Test-User", strangerID)
+	rr = httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("stranger on direct code: %d", rr.Code)
+	}
+}

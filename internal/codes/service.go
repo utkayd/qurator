@@ -14,14 +14,16 @@ import (
 
 	"github.com/utkayd/qurator/internal/blob"
 	"github.com/utkayd/qurator/internal/domain"
+	"github.com/utkayd/qurator/internal/qr"
 	"github.com/utkayd/qurator/internal/shortcode"
 	"github.com/utkayd/qurator/internal/store"
 )
 
-// Renderer produces the persisted PNG for a dynamic code. The QR content is always the
-// instance's scan URL for the short code (FR-007), never the destination. Stream A's
-// internal/qr provides the real implementation; this package depends only on the
-// interface so it can be tested with a fake.
+// Renderer produces the persisted PNG for a code. For a dynamic code the QR content is
+// the instance's scan URL for the short code (FR-007), never the destination; for a
+// direct code it is the destination itself (spec 002, FR-102). Stream A's internal/qr
+// provides the real implementation; this package depends only on the interface so it
+// can be tested with a fake.
 //
 // logo is the optional centre overlay's original bytes (PNG or JPEG) and autoRaise
 // whether the renderer may raise the EC level to fit it (FR-027). effective is the level
@@ -49,6 +51,11 @@ var (
 	ErrAliasInvalid       = errors.New("codes: invalid alias")
 	ErrAliasReserved      = errors.New("codes: alias is reserved")
 	ErrInvalidStyling     = errors.New("codes: invalid styling")
+	ErrInvalidMode        = errors.New("codes: invalid mode")
+	// ErrDirectImmutable refuses destination and state changes on a direct code: the
+	// destination is printed into the image, and disable/enable only mean something on
+	// the redirect path (spec 002, FR-104).
+	ErrDirectImmutable = errors.New("codes: direct code is immutable")
 )
 
 // ValidationError carries the sentinel plus structured details for the error envelope.
@@ -274,7 +281,10 @@ func fillStyling(in domain.Styling) domain.Styling {
 
 // CreateInput is the validated-shape request for Create.
 type CreateInput struct {
-	UserID      string
+	UserID string
+	// Mode selects what the image encodes. Empty means domain.ModeDynamic; any value
+	// other than the two domain constants is ErrInvalidMode.
+	Mode        domain.CodeMode
 	Destination string
 	Alias       string // empty = generate
 	Styling     domain.Styling
@@ -293,9 +303,18 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*domain.Code, err
 	if in.UserID == "" {
 		return nil, errors.New("codes: user id is required")
 	}
+	mode := in.Mode
+	switch mode {
+	case "":
+		mode = domain.ModeDynamic
+	case domain.ModeDynamic, domain.ModeDirect:
+	default:
+		return nil, vErr(ErrInvalidMode, map[string]any{"field": "mode"})
+	}
 	if err := s.ValidateDestination(in.Destination); err != nil {
 		return nil, err
 	}
+	destination := strings.TrimSpace(in.Destination)
 	styling := fillStyling(in.Styling)
 	// The blob key is assigned here, never taken from the caller.
 	styling.LogoBlobKey = ""
@@ -303,6 +322,16 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*domain.Code, err
 		styling.LogoScale = 0
 	} else if styling.LogoScale == 0 {
 		styling.LogoScale = DefaultLogoScale
+	}
+	if mode == domain.ModeDirect {
+		// A direct code encodes the whole destination, so it must fit the symbol
+		// (FR-103). This is the cheap necessary check at the requested level, made before
+		// any short code or blob work; the renderer repeats it against the level it
+		// actually encodes (a logo may raise it, which only lowers the cap) and its typed
+		// error propagates unwrapped, exactly as for ephemeral generation.
+		if limit := qr.Capacity(styling.ECLevel); len(destination) > limit {
+			return nil, &qr.ContentTooLargeError{Limit: limit, Actual: len(destination), Level: styling.ECLevel}
+		}
 	}
 
 	isAlias := in.Alias != ""
@@ -343,8 +372,13 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*domain.Code, err
 			shortCode = shortcode.Generate()
 		}
 		// Renderer errors propagate unwrapped: the typed qr errors (logo_too_large,
-		// contrast_too_low, ...) are part of the API contract and errors.As must reach them.
-		png, effective, err := s.renderer.Render(ctx, s.ScanURL(shortCode), styling, in.Logo, in.LogoAutoRaise)
+		// contrast_too_low, content_too_large, ...) are part of the API contract and
+		// errors.As must reach them.
+		content := s.ScanURL(shortCode)
+		if mode == domain.ModeDirect {
+			content = destination
+		}
+		png, effective, err := s.renderer.Render(ctx, content, styling, in.Logo, in.LogoAutoRaise)
 		if err != nil {
 			cleanup()
 			return nil, err
@@ -371,7 +405,8 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*domain.Code, err
 			ShortCode:   shortCode,
 			IsAlias:     isAlias,
 			UserID:      in.UserID,
-			Destination: strings.TrimSpace(in.Destination),
+			Mode:        mode,
+			Destination: destination,
 			State:       domain.CodeActive,
 			Styling:     styling,
 			BlobKey:     blobKey,
@@ -446,7 +481,19 @@ const lastWriteWinsAttempts = 3
 // it with optimistic concurrency. expectedVersion <= 0 means the caller accepts
 // last-write-wins: the current version is read and used, retrying a few times if
 // another writer slips in between.
+//
+// The code is loaded before anything else: ownership (ErrNotFound) comes first so a
+// non-owner learns nothing, then a direct code is refused outright (ErrDirectImmutable,
+// FR-104) before the new destination is even validated — the answer is "cannot change"
+// regardless of what it would have changed to.
 func (s *Service) UpdateDestination(ctx context.Context, id, userID, dest string, expectedVersion int64) (*domain.Code, error) {
+	cur, err := s.store.GetCodeByID(ctx, id, userID)
+	if err != nil {
+		return nil, err
+	}
+	if cur.Mode == domain.ModeDirect {
+		return nil, vErr(ErrDirectImmutable, map[string]any{"mode": string(cur.Mode)})
+	}
 	if err := s.ValidateDestination(dest); err != nil {
 		return nil, err
 	}
@@ -456,9 +503,10 @@ func (s *Service) UpdateDestination(ctx context.Context, id, userID, dest string
 		attempts = lastWriteWinsAttempts
 	}
 	for i := 0; i < attempts; i++ {
-		cur, err := s.store.GetCodeByID(ctx, id, userID)
-		if err != nil {
-			return nil, err
+		if i > 0 {
+			if cur, err = s.store.GetCodeByID(ctx, id, userID); err != nil {
+				return nil, err
+			}
 		}
 		v := expectedVersion
 		if v <= 0 {
@@ -484,8 +532,17 @@ func (s *Service) UpdateDestination(ctx context.Context, id, userID, dest string
 }
 
 // SetState enables or disables a code. Deleted is terminal: the store reports
-// ErrConflict, which the API surfaces as 409.
+// ErrConflict, which the API surfaces as 409. A direct code has no redirect path for
+// the state to gate, so it is refused with ErrDirectImmutable (FR-104), after the
+// ownership check.
 func (s *Service) SetState(ctx context.Context, id, userID string, state domain.CodeState) (*domain.Code, error) {
+	cur, err := s.store.GetCodeByID(ctx, id, userID)
+	if err != nil {
+		return nil, err
+	}
+	if cur.Mode == domain.ModeDirect {
+		return nil, vErr(ErrDirectImmutable, map[string]any{"mode": string(cur.Mode)})
+	}
 	if err := s.store.SetCodeState(ctx, id, userID, state); err != nil {
 		return nil, err
 	}

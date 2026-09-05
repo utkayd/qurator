@@ -30,10 +30,18 @@ type migration struct {
 var all = []migration{
 	{version: 1, up: up0001},
 	{version: 2, up: up0002},
+	{version: 3, up: up0003},
 }
 
 // Apply runs every pending migration against db for the given dialect. It is idempotent.
 func Apply(ctx context.Context, db *sql.DB, d Dialect) error {
+	return applyUpTo(ctx, db, d, all[len(all)-1].version)
+}
+
+// applyUpTo applies every pending migration whose version is <= target. Tests use it to
+// stage a database at an older schema and prove a later migration backfills correctly;
+// production only ever calls Apply.
+func applyUpTo(ctx context.Context, db *sql.DB, d Dialect, target int64) error {
 	var gd goose.Dialect
 	switch d {
 	case SQLite:
@@ -56,7 +64,7 @@ func Apply(ctx context.Context, db *sql.DB, d Dialect) error {
 	if err != nil {
 		return fmt.Errorf("migrations: provider: %w", err)
 	}
-	if _, err := p.Up(ctx); err != nil {
+	if _, err := p.UpTo(ctx, target); err != nil {
 		return fmt.Errorf("migrations: up: %w", err)
 	}
 	return nil

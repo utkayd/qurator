@@ -69,8 +69,11 @@
     function buildQuery() {
       var params = new URLSearchParams();
       var data = new FormData(form);
-      // The preview encodes whatever text is currently in the destination field — not
-      // the final scan address, which does not exist until the code is saved.
+      // A direct code's printed image encodes the destination itself, so the preview
+      // for direct mode encodes exactly what will be saved. A dynamic code's printed
+      // image instead encodes this instance's own scan address, which does not exist
+      // until the code is saved; the preview approximates it with the destination
+      // text, same placeholder behaviour as before mode existed.
       var content = data.get("destination");
       if (content) params.set("content", String(content));
       // Only styling fields feed the preview beyond that; alias and destination
