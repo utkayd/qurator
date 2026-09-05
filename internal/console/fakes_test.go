@@ -91,13 +91,14 @@ func (f *fakeAuth) SignOut(w http.ResponseWriter, r *http.Request) {
 
 // fakeCodes is an in-memory CodesService.
 type fakeCodes struct {
-	mu    sync.Mutex
-	codes map[string]domain.Code
-	next  int
+	mu          sync.Mutex
+	codes       map[string]domain.Code
+	storageURLs map[string]string
+	next        int
 }
 
 func newFakeCodes() *fakeCodes {
-	return &fakeCodes{codes: map[string]domain.Code{}}
+	return &fakeCodes{codes: map[string]domain.Code{}, storageURLs: map[string]string{}}
 }
 
 func (f *fakeCodes) List(_ context.Context, userID string, filter domain.CodeFilter) (CodePage, error) {
@@ -180,6 +181,17 @@ func (f *fakeCodes) UpdateDestination(_ context.Context, userID, id, destination
 	c.UpdatedAt = time.Now().UTC()
 	f.codes[id] = c
 	return c, nil
+}
+
+func (f *fakeCodes) StorageURL(_ context.Context, userID, id string) (string, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	c, ok := f.codes[id]
+	if !ok || c.UserID != userID {
+		return "", false, ErrNotFound
+	}
+	url, ok := f.storageURLs[id]
+	return url, ok, nil
 }
 
 func (f *fakeCodes) Delete(_ context.Context, userID, id string) error {

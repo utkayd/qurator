@@ -39,6 +39,10 @@ type Options struct {
 	FallbackDestination string
 	// Classify parses the User-Agent; nil records unknown.
 	Classify ClassifyFunc
+	// ImagesDisabled is images.serve_via_instance=false (spec 003, FR-204): GET /i/{file}
+	// answers 404 for every id. The route stays registered and unauthenticated; only
+	// the handler declines, so nothing about Principle IV changes.
+	ImagesDisabled bool
 	// Now is injectable for tests.
 	Now func() time.Time
 }
@@ -51,6 +55,7 @@ type PublicHandler struct {
 	fallback string
 	classify ClassifyFunc
 	now      func() time.Time
+	noImages bool
 }
 
 // NewPublicHandler constructs the handler.
@@ -62,6 +67,7 @@ func NewPublicHandler(o Options) *PublicHandler {
 		fallback: strings.TrimSpace(o.FallbackDestination),
 		classify: o.Classify,
 		now:      o.Now,
+		noImages: o.ImagesDisabled,
 	}
 	if h.recorder == nil {
 		h.recorder = domain.NopRecorder{}

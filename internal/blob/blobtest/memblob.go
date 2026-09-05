@@ -5,7 +5,10 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"io"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -116,4 +119,33 @@ func (m *memBlob) Delete(ctx context.Context, key string) error {
 
 func (m *memBlob) Ping(ctx context.Context) error {
 	return nil
+}
+
+// ---- blob.URLer (spec 003) --------------------------------------------------------------
+//
+// memBlob implements the optional URL capability deterministically so tests above the
+// blob layer can assert URL shapes: PublicURL is base + "/" + key, exactly as the S3
+// driver builds it, and PresignedURL is a fake "mem://<key>?exp=<unix expiry>" that is
+// obviously not fetchable but carries the key and the TTL the caller asked for.
+
+var _ blob.URLer = (*memBlob)(nil)
+
+func (m *memBlob) PublicURL(key string, base string) (string, error) {
+	if err := blob.ValidateKey(key); err != nil {
+		return "", err
+	}
+	if base == "" {
+		return "", errors.New("memblob: public base URL is empty")
+	}
+	return strings.TrimRight(base, "/") + "/" + key, nil
+}
+
+func (m *memBlob) PresignedURL(_ context.Context, key string, ttl time.Duration) (string, error) {
+	if err := blob.ValidateKey(key); err != nil {
+		return "", err
+	}
+	if ttl <= 0 {
+		return "", errors.New("memblob: presign ttl must be positive")
+	}
+	return "mem://" + key + "?exp=" + strconv.FormatInt(time.Now().Add(ttl).Unix(), 10), nil
 }

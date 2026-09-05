@@ -31,6 +31,7 @@ var all = []migration{
 	{version: 1, up: up0001},
 	{version: 2, up: up0002},
 	{version: 3, up: up0003},
+	{version: 4, up: up0004},
 }
 
 // Apply runs every pending migration against db for the given dialect. It is idempotent.

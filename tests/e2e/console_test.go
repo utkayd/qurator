@@ -101,12 +101,33 @@ func (a *e2eAuth) SignOut(w http.ResponseWriter, r *http.Request) {
 }
 
 type e2eCodes struct {
-	mu    sync.Mutex
-	codes map[string]domain.Code
-	next  int
+	mu          sync.Mutex
+	codes       map[string]domain.Code
+	storageURLs map[string]string
+	next        int
 }
 
-func newE2ECodes() *e2eCodes { return &e2eCodes{codes: map[string]domain.Code{}} }
+func newE2ECodes() *e2eCodes {
+	return &e2eCodes{codes: map[string]domain.Code{}, storageURLs: map[string]string{}}
+}
+
+// setStorageURL records the storage URL StorageURL should return for id (FR-208).
+func (c *e2eCodes) setStorageURL(id, url string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.storageURLs[id] = url
+}
+
+func (c *e2eCodes) StorageURL(_ context.Context, userID, id string) (string, bool, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	code, ok := c.codes[id]
+	if !ok || code.UserID != userID {
+		return "", false, console.ErrNotFound
+	}
+	url, ok := c.storageURLs[id]
+	return url, ok, nil
+}
 
 func (c *e2eCodes) List(_ context.Context, userID string, _ domain.CodeFilter) (console.CodePage, error) {
 	c.mu.Lock()
@@ -606,6 +627,109 @@ func TestConsoleDirectAndDynamicModes(t *testing.T) {
 		t.Fatalf("expected 400 for unknown mode, got %d", resp.StatusCode)
 	}
 	_ = resp.Body.Close()
+}
+
+// TestConsoleCodeDetailStorageURL exercises FR-208: the code detail page shows a
+// "Storage URL" row with a copy button when the code has a storage URL, and shows
+// nothing extra when it does not.
+func TestConsoleCodeDetailStorageURL(t *testing.T) {
+	auth := newE2EAuth()
+	auth.addUser(domain.User{ID: "usr_1", Email: "owner@example.com"}, "correct horse battery staple")
+	codes := newE2ECodes()
+	deps := console.Deps{
+		Codes:     codes,
+		Tokens:    newE2ETokens(),
+		Analytics: e2eAnalytics{},
+		Auth:      auth,
+	}
+	h := console.New(deps)
+	srv := httptest.NewServer(h)
+	t.Cleanup(srv.Close)
+
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		t.Fatalf("cookiejar.New: %v", err)
+	}
+	client := &http.Client{Jar: jar}
+
+	resp := doRequest(t, client, http.MethodPost, srv.URL+"/ui/signin", url.Values{
+		"email":    {"owner@example.com"},
+		"password": {"correct horse battery staple"},
+	}, false, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("sign-in failed: status=%d", resp.StatusCode)
+	}
+	_ = resp.Body.Close()
+
+	// A code with a storage URL.
+	resp = doRequest(t, client, http.MethodPost, srv.URL+"/ui/codes", url.Values{
+		"destination": {"https://example.com/with-storage"},
+		"format":      {"png"},
+	}, true, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("create code: status %d, body: %s", resp.StatusCode, readBody(t, resp))
+	}
+	withStoragePath := resp.Request.URL.Path
+	_ = resp.Body.Close()
+	withStorageID := strings.TrimPrefix(withStoragePath, "/ui/codes/")
+	const storageURL = "https://s3.example.com/bucket/with-storage.png?X-Amz-Signature=abc"
+	codes.setStorageURL(withStorageID, storageURL)
+
+	// A code without one.
+	resp = doRequest(t, client, http.MethodPost, srv.URL+"/ui/codes", url.Values{
+		"destination": {"https://example.com/without-storage"},
+		"format":      {"png"},
+	}, true, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("create code: status %d, body: %s", resp.StatusCode, readBody(t, resp))
+	}
+	withoutStoragePath := resp.Request.URL.Path
+	_ = resp.Body.Close()
+
+	// The first code's detail page shows the storage URL row and a copy button.
+	resp = doRequest(t, client, http.MethodGet, srv.URL+withStoragePath, nil, false, nil)
+	withStorageBody := readBody(t, resp)
+	doc := mustParseHTML(t, withStorageBody)
+
+	urlInputs := findAll(doc, func(n *html.Node) bool {
+		_, ok := attr(n, "data-copy-value")
+		return ok
+	})
+	if len(urlInputs) != 1 {
+		t.Fatalf("expected exactly one data-copy-value element, found %d:\n%s", len(urlInputs), withStorageBody)
+	}
+	if v, _ := attr(urlInputs[0], "value"); v != storageURL {
+		t.Fatalf("storage URL input has wrong value: got %q want %q", v, storageURL)
+	}
+
+	copyButtons := findAll(doc, func(n *html.Node) bool {
+		_, ok := attr(n, "data-copy-target")
+		return ok
+	})
+	if len(copyButtons) != 1 {
+		t.Fatalf("expected exactly one data-copy-target copy button, found %d:\n%s", len(copyButtons), withStorageBody)
+	}
+	target, _ := attr(copyButtons[0], "data-copy-target")
+	targetIDs := findAll(doc, func(n *html.Node) bool {
+		id, ok := attr(n, "id")
+		return ok && id == target
+	})
+	if len(targetIDs) != 1 {
+		t.Fatalf("copy button's data-copy-target %q does not match any element id", target)
+	}
+	if !strings.Contains(withStorageBody, "Storage URL") {
+		t.Fatalf("code detail page missing the Storage URL label:\n%s", withStorageBody)
+	}
+
+	// The second code's detail page shows neither.
+	resp = doRequest(t, client, http.MethodGet, srv.URL+withoutStoragePath, nil, false, nil)
+	withoutStorageBody := readBody(t, resp)
+	if strings.Contains(withoutStorageBody, "Storage URL") {
+		t.Fatalf("code without a storage URL must not show the Storage URL row:\n%s", withoutStorageBody)
+	}
+	if strings.Contains(withoutStorageBody, "data-copy-target") {
+		t.Fatalf("code without a storage URL must not show a copy button:\n%s", withoutStorageBody)
+	}
 }
 
 func readBody(t *testing.T, resp *http.Response) string {

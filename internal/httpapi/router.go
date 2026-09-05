@@ -65,6 +65,7 @@ var Routes = []Route{
 	{Group: GroupProtected, Pattern: "POST /v1/qr", Handler: "QR"},
 	{Group: GroupProtected, Pattern: "GET /v1/codes", Handler: "Codes"},
 	{Group: GroupProtected, Pattern: "POST /v1/codes", Handler: "Codes"},
+	{Group: GroupProtected, Pattern: "POST /v1/codes/batch", Handler: "Codes"},
 	{Group: GroupProtected, Pattern: "GET /v1/codes/{id}", Handler: "Codes"},
 	{Group: GroupProtected, Pattern: "PATCH /v1/codes/{id}", Handler: "Codes"},
 	{Group: GroupProtected, Pattern: "DELETE /v1/codes/{id}", Handler: "Codes"},

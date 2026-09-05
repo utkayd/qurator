@@ -186,6 +186,22 @@
   }
 
   // ---------------------------------------------------------------------------
+  // Clipboard copy helper
+  // ---------------------------------------------------------------------------
+  //
+  // Shared by the show-once token secret and the code detail page's storage URL. Falls
+  // back to just running the completion callback when the Clipboard API is unavailable
+  // (e.g. an insecure context), same as before this was factored out.
+
+  function copyToClipboard(value, done) {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(value).then(done, done);
+    } else {
+      done();
+    }
+  }
+
+  // ---------------------------------------------------------------------------
   // Show-once token secret
   // ---------------------------------------------------------------------------
   //
@@ -201,19 +217,43 @@
 
     button.addEventListener("click", function () {
       var value = secretEl.textContent || "";
-      var done = function () {
+      copyToClipboard(value, function () {
         var container = document.querySelector("[data-secret-container]");
         if (container && container.parentNode) {
           container.parentNode.removeChild(container);
         }
         button.textContent = "Copied — hidden";
         button.disabled = true;
-      };
-      if (navigator.clipboard && navigator.clipboard.writeText) {
-        navigator.clipboard.writeText(value).then(done, done);
-      } else {
-        done();
-      }
+      });
+    });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Generic "copy to clipboard" buttons
+  // ---------------------------------------------------------------------------
+  //
+  // Unlike the token secret, the copied value (e.g. the code detail page's storage
+  // URL) stays visible in its read-only input after copying — only the button's label
+  // changes briefly to confirm the copy. Each button names its value element by id via
+  // data-copy-target="<id>".
+
+  function initCopyButtons() {
+    var buttons = document.querySelectorAll("[data-copy-target]");
+    buttons.forEach(function (button) {
+      var targetID = button.getAttribute("data-copy-target");
+      var target = targetID ? document.getElementById(targetID) : null;
+      if (!target) return;
+      var originalLabel = button.textContent;
+
+      button.addEventListener("click", function () {
+        var value = "value" in target ? target.value : target.textContent;
+        copyToClipboard(value || "", function () {
+          button.textContent = "Copied";
+          window.setTimeout(function () {
+            button.textContent = originalLabel;
+          }, 2000);
+        });
+      });
     });
   }
 
@@ -222,5 +262,6 @@
     initPreview();
     initConfirm();
     initTokenSecret();
+    initCopyButtons();
   });
 })();

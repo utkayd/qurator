@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"path"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/utkayd/qurator/internal/blob"
@@ -40,7 +41,36 @@ type Config struct {
 	BaseURL string
 	// AllowedSchemes is the destination scheme allow-list (codes.allowed_schemes).
 	AllowedSchemes []string
+
+	// URLMode is images.url_mode (spec 003, FR-201): "instance" (default, also for the
+	// empty string), "public" or "presigned". Config validation guarantees the latter
+	// two only arrive with a blob store that implements blob.URLer.
+	URLMode string
+	// PublicBaseURL is images.public_base_url, already normalised (no trailing slash).
+	PublicBaseURL string
+	// PresignTTL is images.presign_ttl; zero means one hour.
+	PresignTTL time.Duration
+	// BatchMax is codes.batch_max; zero means DefaultBatchMax.
+	BatchMax int
+	// BatchWorkers is codes.batch_workers; zero means DefaultBatchWorkers.
+	BatchWorkers int
 }
+
+// URL modes (images.url_mode).
+const (
+	URLModeInstance  = "instance"
+	URLModePublic    = "public"
+	URLModePresigned = "presigned"
+)
+
+// Batch defaults, mirrored from config's defaults so the service is usable without it.
+const (
+	DefaultBatchMax     = 500
+	DefaultBatchWorkers = 4
+	DefaultPresignTTL   = time.Hour
+	// MaxClientRefLen bounds client_ref (spec 003 assumptions: opaque, <= 128 chars).
+	MaxClientRefLen = 128
+)
 
 // Sentinel errors for validation failures. Each corresponds to a stable API error code
 // (contracts/errors.md); the HTTP layer maps them.
@@ -56,7 +86,22 @@ var (
 	// destination is printed into the image, and disable/enable only mean something on
 	// the redirect path (spec 002, FR-104).
 	ErrDirectImmutable = errors.New("codes: direct code is immutable")
+	// ErrClientRefInvalid: a client_ref is too long or repeated within one batch (spec
+	// 003). The ValidationError details say which.
+	ErrClientRefInvalid = errors.New("codes: invalid client_ref")
 )
+
+// ClientRefConflictError: the caller reused a client_ref with a different destination or
+// mode (spec 003, FR-206). It names the code that holds the ref so the caller can decide;
+// it is never silently ignored.
+type ClientRefConflictError struct {
+	ClientRef  string
+	ExistingID string
+}
+
+func (e *ClientRefConflictError) Error() string {
+	return fmt.Sprintf("codes: client_ref %q already used by code %s with a different destination or mode", e.ClientRef, e.ExistingID)
+}
 
 // ValidationError carries the sentinel plus structured details for the error envelope.
 type ValidationError struct {
@@ -80,12 +125,19 @@ const generateAttempts = 5
 type Service struct {
 	store    store.Store
 	blob     blob.BlobStore
+	urler    blob.URLer // nil when the blob store cannot address its objects
 	renderer Renderer
 	cache    *Cache
 	base     *url.URL
 	baseRaw  string
 	schemes  map[string]bool
 	now      func() time.Time
+
+	urlMode      string
+	publicBase   string
+	presignTTL   time.Duration
+	batchMax     int
+	batchWorkers int
 }
 
 // NewService wires the service. cache may be nil for callers that never resolve.
@@ -107,8 +159,33 @@ func NewService(st store.Store, bl blob.BlobStore, r Renderer, cache *Cache, cfg
 			base = u
 		}
 	}
-	return &Service{store: st, blob: bl, renderer: r, cache: cache, base: base, baseRaw: baseRaw, schemes: schemes, now: func() time.Time { return time.Now().UTC() }}
+	svc := &Service{
+		store: st, blob: bl, renderer: r, cache: cache, base: base, baseRaw: baseRaw, schemes: schemes,
+		now:        func() time.Time { return time.Now().UTC() },
+		urlMode:    cfg.URLMode,
+		publicBase: strings.TrimRight(cfg.PublicBaseURL, "/"),
+		presignTTL: cfg.PresignTTL, batchMax: cfg.BatchMax, batchWorkers: cfg.BatchWorkers,
+	}
+	if svc.urlMode == "" {
+		svc.urlMode = URLModeInstance
+	}
+	if svc.presignTTL <= 0 {
+		svc.presignTTL = DefaultPresignTTL
+	}
+	if svc.batchMax <= 0 {
+		svc.batchMax = DefaultBatchMax
+	}
+	if svc.batchWorkers <= 0 {
+		svc.batchWorkers = DefaultBatchWorkers
+	}
+	if u, ok := bl.(blob.URLer); ok {
+		svc.urler = u
+	}
+	return svc
 }
+
+// BatchMax is the largest batch CreateBatch accepts (codes.batch_max).
+func (s *Service) BatchMax() int { return s.batchMax }
 
 // AllowedSchemes lists the configured scheme allow-list, sorted for stable error details.
 func (s *Service) AllowedSchemes() []string {
@@ -131,8 +208,64 @@ func sortStrings(a []string) {
 // ScanURL is the address encoded into the QR symbol.
 func (s *Service) ScanURL(shortCode string) string { return s.baseRaw + "/r/" + shortCode }
 
-// ImageURL is where the persisted image is served.
-func (s *Service) ImageURL(id string) string { return s.baseRaw + "/i/" + id + ".png" }
+// InstanceImageURL is this instance's own address for a code's image (GET /i/{id}.png).
+func (s *Service) InstanceImageURL(id string) string { return s.baseRaw + "/i/" + id + ".png" }
+
+// ImageURL is where a code's persisted image should be fetched from, per images.url_mode
+// (spec 003, FR-202): the instance route, the public bucket address, or a presigned link.
+// If the blob store cannot produce the configured kind of URL (which config validation
+// rules out, so this is a defence) the instance route is returned and a warning logged.
+func (s *Service) ImageURL(ctx context.Context, c *domain.Code) string {
+	switch s.urlMode {
+	case URLModePublic:
+		if u, ok := s.publicURL(c); ok {
+			return u
+		}
+	case URLModePresigned:
+		if u, ok := s.presignedURL(ctx, c); ok {
+			return u
+		}
+	}
+	return s.InstanceImageURL(c.ID)
+}
+
+// StorageURL is the image's address in the blob store, independent of this instance:
+// the public URL when a base is configured, else a presigned link. ok is false when the
+// blob store cannot derive one (the filesystem driver), in which case callers omit the
+// field rather than fabricate it (FR-202).
+func (s *Service) StorageURL(ctx context.Context, c *domain.Code) (string, bool) {
+	if s.urler == nil || c.BlobKey == "" {
+		return "", false
+	}
+	if s.publicBase != "" {
+		return s.publicURL(c)
+	}
+	return s.presignedURL(ctx, c)
+}
+
+func (s *Service) publicURL(c *domain.Code) (string, bool) {
+	if s.urler == nil || s.publicBase == "" || c.BlobKey == "" {
+		return "", false
+	}
+	u, err := s.urler.PublicURL(c.BlobKey, s.publicBase)
+	if err != nil {
+		slog.Warn("codes: public image URL", "code", c.ID, "err", err)
+		return "", false
+	}
+	return u, true
+}
+
+func (s *Service) presignedURL(ctx context.Context, c *domain.Code) (string, bool) {
+	if s.urler == nil || c.BlobKey == "" {
+		return "", false
+	}
+	u, err := s.urler.PresignedURL(ctx, c.BlobKey, s.presignTTL)
+	if err != nil {
+		slog.WarnContext(ctx, "codes: presigned image URL", "code", c.ID, "err", err)
+		return "", false
+	}
+	return u, true
+}
 
 // BlobKeyFor is the blob key of a code's persisted PNG, sharded on the id's random part
 // so a flat prefix never accumulates one enormous listing.
@@ -294,12 +427,29 @@ type CreateInput struct {
 	// LogoAutoRaise lets the renderer raise the EC level when the logo exceeds the
 	// requested level's budget (FR-027).
 	LogoAutoRaise bool
+	// ClientRef is the caller's optional idempotency key (spec 003, FR-206). Create
+	// stores it; CreateBatch also honours it (an existing code with the same
+	// destination and mode is returned instead of a new one).
+	ClientRef string
 }
 
-// Create validates, chooses the short code, renders and persists the image, then inserts
-// the code (which reserves the short code atomically). Generated codes retry on
-// collision; aliases never do — a taken alias is the caller's problem (FR-018).
-func (s *Service) Create(ctx context.Context, in CreateInput) (*domain.Code, error) {
+// prepared is a CreateInput after validation, with every default applied: what the
+// render and the row need, independent of which short code ends up chosen.
+type prepared struct {
+	mode        domain.CodeMode
+	destination string
+	styling     domain.Styling
+	isAlias     bool
+	shortCode   string // the normalised alias; empty when one is to be generated
+	logo        []byte
+	autoRaise   bool
+	clientRef   string
+}
+
+// prepare runs every validation Create and CreateBatch share (mode, destination, styling
+// defaults, direct-code capacity, alias shape, client_ref length) without touching the
+// store or the blob store. Errors are the same typed values Create has always returned.
+func (s *Service) prepare(in CreateInput) (*prepared, error) {
 	if in.UserID == "" {
 		return nil, errors.New("codes: user id is required")
 	}
@@ -311,17 +461,20 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*domain.Code, err
 	default:
 		return nil, vErr(ErrInvalidMode, map[string]any{"field": "mode"})
 	}
+	if len(in.ClientRef) > MaxClientRefLen {
+		return nil, vErr(ErrClientRefInvalid, map[string]any{"field": "client_ref", "reason": "too_long", "max_length": MaxClientRefLen})
+	}
 	if err := s.ValidateDestination(in.Destination); err != nil {
 		return nil, err
 	}
-	destination := strings.TrimSpace(in.Destination)
-	styling := fillStyling(in.Styling)
-	// The blob key is assigned here, never taken from the caller.
-	styling.LogoBlobKey = ""
+	p := &prepared{mode: mode, destination: strings.TrimSpace(in.Destination), logo: in.Logo, autoRaise: in.LogoAutoRaise, clientRef: in.ClientRef}
+	p.styling = fillStyling(in.Styling)
+	// The blob key is assigned at materialisation, never taken from the caller.
+	p.styling.LogoBlobKey = ""
 	if len(in.Logo) == 0 {
-		styling.LogoScale = 0
-	} else if styling.LogoScale == 0 {
-		styling.LogoScale = DefaultLogoScale
+		p.styling.LogoScale = 0
+	} else if p.styling.LogoScale == 0 {
+		p.styling.LogoScale = DefaultLogoScale
 	}
 	if mode == domain.ModeDirect {
 		// A direct code encodes the whole destination, so it must fit the symbol
@@ -329,108 +482,302 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*domain.Code, err
 		// any short code or blob work; the renderer repeats it against the level it
 		// actually encodes (a logo may raise it, which only lowers the cap) and its typed
 		// error propagates unwrapped, exactly as for ephemeral generation.
-		if limit := qr.Capacity(styling.ECLevel); len(destination) > limit {
-			return nil, &qr.ContentTooLargeError{Limit: limit, Actual: len(destination), Level: styling.ECLevel}
+		if limit := qr.Capacity(p.styling.ECLevel); len(p.destination) > limit {
+			return nil, &qr.ContentTooLargeError{Limit: limit, Actual: len(p.destination), Level: p.styling.ECLevel}
 		}
 	}
-
-	isAlias := in.Alias != ""
-	var shortCode string
-	if isAlias {
-		shortCode = shortcode.NormalizeAlias(in.Alias)
-		if err := shortcode.ValidateAlias(shortCode); err != nil {
+	if in.Alias != "" {
+		p.isAlias = true
+		p.shortCode = shortcode.NormalizeAlias(in.Alias)
+		if err := shortcode.ValidateAlias(p.shortCode); err != nil {
 			if errors.Is(err, shortcode.ErrAliasReserved) {
-				return nil, vErr(ErrAliasReserved, map[string]any{"alias": shortCode})
+				return nil, vErr(ErrAliasReserved, map[string]any{"alias": p.shortCode})
 			}
-			return nil, vErr(ErrAliasInvalid, map[string]any{"alias": shortCode, "reason": reason(err)})
+			return nil, vErr(ErrAliasInvalid, map[string]any{"alias": p.shortCode, "reason": reason(err)})
 		}
 	}
+	return p, nil
+}
 
-	id := domain.NewCodeID()
+// materialise renders the image for one (id, shortCode) pair, stores the logo and the
+// PNG, and returns the row to insert. On any failure every blob it wrote is removed and
+// the error is returned unwrapped (renderer errors are typed API errors).
+func (s *Service) materialise(ctx context.Context, userID, id, shortCode string, p *prepared) (*domain.Code, error) {
 	blobKey := BlobKeyFor(id)
-	logoKey := ""
-	if len(in.Logo) > 0 {
-		logoKey = LogoBlobKeyFor(id)
+	content := s.ScanURL(shortCode)
+	if p.mode == domain.ModeDirect {
+		content = p.destination
+	}
+	styling := p.styling
+	png, effective, err := s.renderer.Render(ctx, content, styling, p.logo, p.autoRaise)
+	if err != nil {
+		return nil, err
+	}
+	if effective != "" {
+		styling.ECLevelEffective = effective
+	}
+	var written []string
+	fail := func(err error) (*domain.Code, error) {
+		s.removeBlobs(ctx, written)
+		return nil, err
+	}
+	if len(p.logo) > 0 {
+		logoKey := LogoBlobKeyFor(id)
+		ct := http.DetectContentType(p.logo)
+		if _, err := s.blob.Put(ctx, logoKey, bytes.NewReader(p.logo), int64(len(p.logo)), ct); err != nil {
+			return fail(fmt.Errorf("codes: store logo: %w", err))
+		}
+		written = append(written, logoKey)
+		styling.LogoBlobKey = logoKey
+	}
+	etag, err := s.blob.Put(ctx, blobKey, bytes.NewReader(png), int64(len(png)), "image/png")
+	if err != nil {
+		return fail(fmt.Errorf("codes: store image: %w", err))
+	}
+	now := s.now()
+	return &domain.Code{
+		ID:          id,
+		ShortCode:   shortCode,
+		IsAlias:     p.isAlias,
+		UserID:      userID,
+		Mode:        p.mode,
+		ClientRef:   p.clientRef,
+		Destination: p.destination,
+		State:       domain.CodeActive,
+		Styling:     styling,
+		BlobKey:     blobKey,
+		BlobETag:    etag,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}, nil
+}
+
+// removeBlobs deletes the blobs of a code whose row never landed. A failure here only
+// orphans an object; it is logged, never returned.
+func (s *Service) removeBlobs(ctx context.Context, keys []string) {
+	for _, k := range keys {
+		if k == "" {
+			continue
+		}
+		if delErr := s.blob.Delete(ctx, k); delErr != nil && !errors.Is(delErr, blob.ErrBlobNotFound) {
+			slog.WarnContext(ctx, "codes: orphaned blob after failed create", "key", k, "err", delErr)
+		}
+	}
+}
+
+func blobKeysOf(c *domain.Code) []string {
+	return []string{c.BlobKey, c.Styling.LogoBlobKey}
+}
+
+// Create validates, chooses the short code, renders and persists the image, then inserts
+// the code (which reserves the short code atomically). Generated codes retry on
+// collision; aliases never do — a taken alias is the caller's problem (FR-018).
+func (s *Service) Create(ctx context.Context, in CreateInput) (*domain.Code, error) {
+	p, err := s.prepare(in)
+	if err != nil {
+		return nil, err
 	}
 	attempts := 1
-	if !isAlias {
+	if !p.isAlias {
 		attempts = generateAttempts
-	}
-	cleanup := func() {
-		for _, k := range []string{blobKey, logoKey} {
-			if k == "" {
-				continue
-			}
-			if delErr := s.blob.Delete(ctx, k); delErr != nil && !errors.Is(delErr, blob.ErrBlobNotFound) {
-				slog.WarnContext(ctx, "codes: orphaned blob after failed create", "key", k, "err", delErr)
-			}
-		}
 	}
 	var lastErr error
 	for i := 0; i < attempts; i++ {
-		if !isAlias {
+		shortCode := p.shortCode
+		if !p.isAlias {
 			shortCode = shortcode.Generate()
 		}
-		// Renderer errors propagate unwrapped: the typed qr errors (logo_too_large,
-		// contrast_too_low, content_too_large, ...) are part of the API contract and
-		// errors.As must reach them.
-		content := s.ScanURL(shortCode)
-		if mode == domain.ModeDirect {
-			content = destination
-		}
-		png, effective, err := s.renderer.Render(ctx, content, styling, in.Logo, in.LogoAutoRaise)
+		c, err := s.materialise(ctx, in.UserID, domain.NewCodeID(), shortCode, p)
 		if err != nil {
-			cleanup()
 			return nil, err
-		}
-		if effective != "" {
-			styling.ECLevelEffective = effective
-		}
-		if logoKey != "" && styling.LogoBlobKey == "" {
-			ct := http.DetectContentType(in.Logo)
-			if _, err := s.blob.Put(ctx, logoKey, bytes.NewReader(in.Logo), int64(len(in.Logo)), ct); err != nil {
-				cleanup()
-				return nil, fmt.Errorf("codes: store logo: %w", err)
-			}
-			styling.LogoBlobKey = logoKey
-		}
-		etag, err := s.blob.Put(ctx, blobKey, bytes.NewReader(png), int64(len(png)), "image/png")
-		if err != nil {
-			cleanup()
-			return nil, fmt.Errorf("codes: store image: %w", err)
-		}
-		now := s.now()
-		c := &domain.Code{
-			ID:          id,
-			ShortCode:   shortCode,
-			IsAlias:     isAlias,
-			UserID:      in.UserID,
-			Mode:        mode,
-			Destination: destination,
-			State:       domain.CodeActive,
-			Styling:     styling,
-			BlobKey:     blobKey,
-			BlobETag:    etag,
-			CreatedAt:   now,
-			UpdatedAt:   now,
 		}
 		err = s.store.CreateCode(ctx, c)
 		if err == nil {
 			s.cache.Invalidate(shortCode)
 			return c, nil
 		}
+		s.removeBlobs(ctx, blobKeysOf(c))
 		lastErr = err
 		if !errors.Is(err, store.ErrAliasTaken) {
 			break
 		}
-		if isAlias {
+		if p.isAlias {
 			lastErr = vErr(store.ErrAliasTaken, map[string]any{"alias": shortCode})
 			break
 		}
 		slog.WarnContext(ctx, "codes: generated short code collided; retrying", "attempt", i+1)
 	}
-	cleanup()
 	return nil, lastErr
+}
+
+// ---- batch creation (spec 003) --------------------------------------------------------
+
+// BatchStatus is the per-item outcome of CreateBatch.
+type BatchStatus string
+
+// Per-item outcomes (FR-205).
+const (
+	BatchCreated  BatchStatus = "created"
+	BatchExisting BatchStatus = "existing"
+	BatchError    BatchStatus = "error"
+)
+
+// BatchResult is one item's outcome, at the item's input index. Code is set for created
+// and existing; Err for error, carrying the same typed values Create returns.
+type BatchResult struct {
+	Index  int
+	Status BatchStatus
+	Code   *domain.Code
+	Err    error
+}
+
+// CreateBatch creates many codes for one user (FR-205/FR-206/FR-207). It never fails as a
+// whole — the caller checks BatchMax first — and returns exactly one result per item, in
+// input order. Phases:
+//
+//  1. client_ref resolution: an item whose ref this user already used comes back as
+//     existing (same destination and mode) or as a ClientRefConflictError; a ref repeated
+//     within the batch is an error on its second occurrence.
+//  2. validation, shared with Create via prepare, plus alias availability (so a taken
+//     alias fails its own item instead of the whole transaction).
+//  3. rendering and blob writes for the surviving items, in parallel, bounded by
+//     codes.batch_workers.
+//  4. ONE store transaction for every rendered item. If it fails — a client_ref or alias
+//     race lost between the pre-check and the insert, or the store being down — every
+//     rendered item is marked error and its blobs are removed, so no partial set is left.
+//
+// Per-row attribution of a store failure is deliberately not attempted: the drivers can
+// only report the first violated constraint, not which row hit it, and the pre-checks
+// make such a failure a genuine race rather than the normal path.
+func (s *Service) CreateBatch(ctx context.Context, userID string, items []CreateInput) []BatchResult {
+	results := make([]BatchResult, len(items))
+	for i := range results {
+		results[i] = BatchResult{Index: i, Status: BatchError}
+	}
+	if userID == "" {
+		for i := range results {
+			results[i].Err = errors.New("codes: user id is required")
+		}
+		return results
+	}
+
+	type pendingItem struct {
+		idx int
+		p   *prepared
+	}
+	var pending []pendingItem
+	seenRef := map[string]int{}
+	seenAlias := map[string]int{}
+	for i, in := range items {
+		in.UserID = userID
+		if ref := in.ClientRef; ref != "" && len(ref) <= MaxClientRefLen {
+			if _, dup := seenRef[ref]; dup {
+				results[i].Err = vErr(ErrClientRefInvalid, map[string]any{"field": "client_ref", "reason": "duplicate_in_batch", "client_ref": ref})
+				continue
+			}
+			seenRef[ref] = i
+			existing, err := s.store.GetCodeByClientRef(ctx, userID, ref)
+			switch {
+			case err == nil:
+				if existing.Destination == strings.TrimSpace(in.Destination) && modeOf(existing) == modeOf(&domain.Code{Mode: in.Mode}) {
+					results[i] = BatchResult{Index: i, Status: BatchExisting, Code: existing}
+				} else {
+					results[i].Err = &ClientRefConflictError{ClientRef: ref, ExistingID: existing.ID}
+				}
+				continue
+			case !errors.Is(err, store.ErrNotFound):
+				results[i].Err = err
+				continue
+			}
+		}
+		p, err := s.prepare(in)
+		if err != nil {
+			results[i].Err = err
+			continue
+		}
+		if p.isAlias {
+			if _, dup := seenAlias[p.shortCode]; dup {
+				results[i].Err = vErr(store.ErrAliasTaken, map[string]any{"alias": p.shortCode})
+				continue
+			}
+			ok, err := s.store.IsAliasAvailable(ctx, p.shortCode)
+			if err != nil {
+				results[i].Err = err
+				continue
+			}
+			if !ok {
+				results[i].Err = vErr(store.ErrAliasTaken, map[string]any{"alias": p.shortCode})
+				continue
+			}
+			seenAlias[p.shortCode] = i
+		}
+		pending = append(pending, pendingItem{idx: i, p: p})
+	}
+	if len(pending) == 0 {
+		return results
+	}
+
+	// Render in parallel: a semaphore bounds concurrency, the wait group joins. Each
+	// goroutine writes only its own slots, so no further synchronisation is needed.
+	rendered := make([]*domain.Code, len(pending))
+	sem := make(chan struct{}, s.batchWorkers)
+	var wg sync.WaitGroup
+	for j, pe := range pending {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(j int, pe pendingItem) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			shortCode := pe.p.shortCode
+			if !pe.p.isAlias {
+				shortCode = shortcode.Generate()
+			}
+			c, err := s.materialise(ctx, userID, domain.NewCodeID(), shortCode, pe.p)
+			if err != nil {
+				results[pe.idx].Err = err
+				return
+			}
+			rendered[j] = c
+		}(j, pe)
+	}
+	wg.Wait()
+
+	var toInsert []*domain.Code
+	var insertIdx []int
+	for j, c := range rendered {
+		if c != nil {
+			toInsert = append(toInsert, c)
+			insertIdx = append(insertIdx, pending[j].idx)
+		}
+	}
+	if len(toInsert) == 0 {
+		return results
+	}
+	if err := s.store.CreateCodes(ctx, toInsert); err != nil {
+		// A generated short code or a client_ref lost a race, or the store is down:
+		// nothing was written, so remove every image and fail every pending item.
+		if errors.Is(err, store.ErrAliasTaken) || errors.Is(err, store.ErrClientRefTaken) {
+			err = vErr(err, map[string]any{"reason": "lost_race"})
+		}
+		for k, c := range toInsert {
+			s.removeBlobs(ctx, blobKeysOf(c))
+			results[insertIdx[k]].Err = err
+		}
+		return results
+	}
+	for k, c := range toInsert {
+		results[insertIdx[k]] = BatchResult{Index: insertIdx[k], Status: BatchCreated, Code: c}
+		s.cache.Invalidate(c.ShortCode)
+	}
+	return results
+}
+
+// modeOf reads a code's mode with the pre-002 default applied.
+func modeOf(c *domain.Code) domain.CodeMode {
+	if c.Mode == "" {
+		return domain.ModeDynamic
+	}
+	return c.Mode
 }
 
 func reason(err error) string {

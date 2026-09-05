@@ -36,7 +36,7 @@ func TestS3BlobContract(t *testing.T) {
 		t.Fatalf("minio client: %v", err)
 	}
 
-	blobtest.RunBlobContract(t, func(t *testing.T) blob.BlobStore {
+	newBlob := func(t *testing.T) blob.BlobStore {
 		t.Helper()
 		var b [6]byte
 		if _, err := rand.Read(b[:]); err != nil {
@@ -67,7 +67,10 @@ func TestS3BlobContract(t *testing.T) {
 			t.Fatalf("open s3 blob: %v", err)
 		}
 		return s
-	})
+	}
+	blobtest.RunBlobContract(t, newBlob)
+	// Spec 003: the S3 driver is the one that can address its objects.
+	blobtest.RunURLerContract(t, newBlob)
 }
 
 func envOr(k, def string) string {

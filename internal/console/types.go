@@ -50,6 +50,17 @@ type CodesService interface {
 	// sent as the optimistic-concurrency check; a losing write returns ErrVersionConflict.
 	UpdateDestination(ctx context.Context, userID, id, destination string, ifMatchVersion *int64) (domain.Code, error)
 	Delete(ctx context.Context, userID, id string) error
+	// StorageURL returns the rendered code image's persisted storage URL (FR-208),
+	// e.g. an S3/presigned URL, and ok=false when the code has none (url_mode off,
+	// or the code predates storage). The console shows this on the code detail page
+	// with a copy button when ok is true.
+	//
+	// Wiring-Needed: cmd/qurator/console_adapters.go's codesAdapter needs a
+	// StorageURL(ctx, userID, id) method: do the same ownership Get(ctx, userID, id)
+	// the adapter's existing Get does, then call svc.StorageURL(ctx, code) on the
+	// underlying internal/codes service to resolve the persisted URL, translating a
+	// "not found" the same way Get does (returning console.ErrNotFound).
+	StorageURL(ctx context.Context, userID, id string) (url string, ok bool, err error)
 }
 
 // TokensService is the subset of the API-token capability the console needs.

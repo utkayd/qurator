@@ -29,8 +29,17 @@ type Store interface {
 	// the short code. GetCodeByID with a non-owner userID returns ErrNotFound, never the
 	// row — an existence oracle would let one user enumerate another's codes.
 	CreateCode(ctx context.Context, c *domain.Code) error
+	// CreateCodes inserts every code in ONE transaction, all or nothing (spec 003,
+	// FR-207): if any row fails (alias taken, client_ref taken, duplicate id) no row is
+	// persisted and the error names the first failure without attributing it to an
+	// index. An empty slice is a no-op. On success every element is updated exactly as
+	// CreateCode updates its argument.
+	CreateCodes(ctx context.Context, cs []*domain.Code) error
 	GetCodeByShortCode(ctx context.Context, shortCode string) (*domain.Code, error) // case-insensitive
 	GetCodeByID(ctx context.Context, id, userID string) (*domain.Code, error)
+	// GetCodeByClientRef finds the caller's code carrying ref, deleted rows included;
+	// ErrNotFound otherwise (spec 003, FR-206).
+	GetCodeByClientRef(ctx context.Context, userID, ref string) (*domain.Code, error)
 	ListCodes(ctx context.Context, f domain.CodeFilter) (items []*domain.Code, nextCursor string, err error)
 	// UpdateDestination applies only when the row's version equals expectedVersion, then
 	// increments it; zero rows affected is ErrConflict.

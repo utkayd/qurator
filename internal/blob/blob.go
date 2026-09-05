@@ -25,3 +25,18 @@ type BlobStore interface {
 	Delete(ctx context.Context, key string) error
 	Ping(ctx context.Context) error
 }
+
+// URLer is the optional capability of a BlobStore that can hand out addresses for its
+// objects that bypass this instance entirely (spec 003, FR-203). It is detected by type
+// assertion: the S3 driver implements it, the filesystem driver does not, and callers
+// that find it absent simply omit storage URLs. Drivers that implement it must pass
+// blobtest.RunURLerContract.
+type URLer interface {
+	// PublicURL joins an already-normalised base (no trailing slash) with key. It never
+	// touches the network and does not prove the object is reachable — that is the
+	// operator's bucket policy or CDN.
+	PublicURL(key string, base string) (string, error)
+	// PresignedURL returns a link that fetches key without credentials for ttl. It is
+	// computed per call and never stored.
+	PresignedURL(ctx context.Context, key string, ttl time.Duration) (string, error)
+}

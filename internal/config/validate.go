@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/url"
 	"strings"
 )
 
@@ -72,6 +73,17 @@ func (c *Config) Validate() error {
 		}
 	}
 
+	// Spec 003 batch bounds. Zero would make every batch oversized; the upper caps keep
+	// one request from monopolising the instance.
+	if c.Codes.BatchMax < 1 || c.Codes.BatchMax > 5000 {
+		errs = append(errs, fmt.Errorf("config: codes.batch_max must be between 1 and 5000, got %d", c.Codes.BatchMax))
+	}
+	if c.Codes.BatchWorkers < 1 || c.Codes.BatchWorkers > 64 {
+		errs = append(errs, fmt.Errorf("config: codes.batch_workers must be between 1 and 64, got %d", c.Codes.BatchWorkers))
+	}
+
+	errs = append(errs, c.validateImages()...)
+
 	if c.Render.MaxPx <= 0 {
 		errs = append(errs, fmt.Errorf("config: render.max_px must be > 0, got %d", c.Render.MaxPx))
 	}
@@ -98,6 +110,43 @@ func (c *Config) Validate() error {
 	}
 
 	return errors.Join(errs...)
+}
+
+var validURLModes = map[string]bool{"instance": true, "public": true, "presigned": true}
+
+// validateImages checks the spec 003 image addressing rules (FR-201, US1 scenario 4,
+// US2 scenario 2) and normalises images.public_base_url in place (no trailing slash).
+func (c *Config) validateImages() []error {
+	var errs []error
+	mode := c.Images.URLMode
+	if !validURLModes[mode] {
+		errs = append(errs, fmt.Errorf("config: images.url_mode must be one of instance, public, presigned, got %q", mode))
+		return errs
+	}
+	if mode != "instance" && c.Blob.Driver != "s3" {
+		errs = append(errs, fmt.Errorf("config: images.url_mode %q needs an object store that can address its objects, but blob.driver is %q (only s3 can)", mode, c.Blob.Driver))
+	}
+	if mode == "public" && c.Images.PublicBaseURL == "" {
+		errs = append(errs, errors.New("config: images.public_base_url is required when images.url_mode is public"))
+	}
+	if raw := c.Images.PublicBaseURL; raw != "" {
+		u, err := url.Parse(raw)
+		switch {
+		case err != nil:
+			errs = append(errs, fmt.Errorf("config: images.public_base_url: %w", err))
+		case (u.Scheme != "http" && u.Scheme != "https") || u.Host == "":
+			errs = append(errs, fmt.Errorf("config: images.public_base_url must be an absolute http or https URL, got %q", raw))
+		default:
+			c.Images.PublicBaseURL = strings.TrimRight(raw, "/")
+		}
+	}
+	if c.Images.PresignTTL <= 0 {
+		errs = append(errs, fmt.Errorf("config: images.presign_ttl must be > 0, got %s", c.Images.PresignTTL))
+	}
+	if !c.Images.ServeViaInstance && mode == "instance" {
+		errs = append(errs, errors.New("config: images.serve_via_instance is false but images.url_mode is instance: no image could be reached; set url_mode to public or presigned"))
+	}
+	return errs
 }
 
 // parseLogLevel validates that level is one of slog's recognised names.

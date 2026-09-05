@@ -8,6 +8,13 @@
     <span class="badge {{.Code.State}}">{{.Code.State}}</span>
   </p>
   <p><a href="{{.ImageURL}}">Download image</a></p>
+  {{if .StorageURL}}
+  <div class="field">
+    <label for="storage-url">Storage URL</label>
+    <input type="text" id="storage-url" data-copy-value readonly value="{{.StorageURL}}">
+    <button type="button" data-copy-target="storage-url">Copy</button>
+  </div>
+  {{end}}
   {{if eq .Code.Mode "direct"}}
   <p class="help">This is a direct code: the destination is printed into the image and cannot be changed.</p>
   {{else}}

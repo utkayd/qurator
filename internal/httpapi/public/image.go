@@ -25,6 +25,12 @@ var fileRe = regexp.MustCompile(`^(cod_[0-9a-hjkmnp-tv-z]{16})\.(png)$`)
 // image serves GET /i/{file}: Stat for the ETag → 304 on If-None-Match → stream Get.
 // Blob-store failures here never affect /r/{code} (Edge Cases: "Blob store unavailable").
 func (h *PublicHandler) image(w http.ResponseWriter, r *http.Request) {
+	if h.noImages {
+		// images.serve_via_instance=false: the operator serves images from the bucket or
+		// a CDN and this instance is out of the image path entirely (FR-204).
+		httpapi.WriteError(w, httpapi.CodeNotFound, "No such image.", nil)
+		return
+	}
 	m := fileRe.FindStringSubmatch(r.PathValue("file"))
 	if m == nil {
 		httpapi.WriteError(w, httpapi.CodeNotFound, "No such image.", nil)

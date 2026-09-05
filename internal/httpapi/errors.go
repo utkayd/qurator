@@ -31,6 +31,8 @@ const (
 	CodeConflict                   ErrorCode = "conflict"
 	CodeDirectCodeImmutable        ErrorCode = "direct_code_immutable" // spec 002
 	CodeNotTracked                 ErrorCode = "not_tracked"           // spec 002
+	CodeBatchTooLarge              ErrorCode = "batch_too_large"       // spec 003
+	CodeClientRefConflict          ErrorCode = "client_ref_conflict"   // spec 003
 	CodeRateLimited                ErrorCode = "rate_limited"
 	CodeInternal                   ErrorCode = "internal"
 	CodeNotImplemented             ErrorCode = "not_implemented" // foundation stubs only
@@ -39,9 +41,9 @@ const (
 // Status returns the HTTP status conventionally paired with a code.
 func (c ErrorCode) Status() int {
 	switch c {
-	case CodeContentTooLarge:
+	case CodeContentTooLarge, CodeBatchTooLarge:
 		return http.StatusRequestEntityTooLarge
-	case CodeAliasReserved, CodeAliasTaken, CodeConflict, CodeDirectCodeImmutable:
+	case CodeAliasReserved, CodeAliasTaken, CodeConflict, CodeDirectCodeImmutable, CodeClientRefConflict:
 		return http.StatusConflict
 	case CodeNotFound:
 		return http.StatusNotFound

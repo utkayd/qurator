@@ -51,6 +51,8 @@ returning it are different acts, and only one of them is safe.
 | `conflict` | 409 | Concurrent modification lost the race | `expected`, `actual` |
 | `direct_code_immutable` | 409 | Destination/state change on a direct code, whose destination is encoded in the printed image (spec 002) | `mode` |
 | `not_tracked` | 400 | Analytics requested for a direct code; scans never pass through the instance (spec 002) | `mode` |
+| `batch_too_large` | 413 | Batch exceeds `codes.batch_max` (spec 003) | `limit`, `actual` |
+| `client_ref_conflict` | 409 | `client_ref` already used by this user for a different destination or mode (spec 003) | `client_ref`, `existing_id` |
 | `rate_limited` | 429 | Rate limit exceeded | `retry_after_s` |
 | `internal` | 500 | Unexpected failure; details are logged, not returned | — |
 

@@ -159,6 +159,7 @@ paths:
 
   /i/{id}.{ext}:
     get:
+      # Returns 404 for every id when images.serve_via_instance=false (spec 003).
       operationId: getStoredImage
       tags: [public]
       summary: Fetch a dynamic code's stored rendered image
@@ -674,6 +675,72 @@ paths:
   # ---------------------------------------------------------------------
   # Analytics
   # ---------------------------------------------------------------------
+
+  /v1/codes/batch:
+    post:
+      operationId: createCodesBatch
+      tags: [codes]
+      summary: Create up to `codes.batch_max` dynamic or direct codes in one request
+      description: |
+        Each item is an independent `CreateCodeRequest`. The response is per item: a
+        created code, the existing code when the item's `client_ref` was already used
+        with the same destination and mode (`status: existing`), or an error envelope
+        for that item alone. The HTTP status is `200` whenever the batch was processed;
+        only a malformed or oversized batch fails as a whole. Metadata for all created
+        items is written in one transaction; images render in parallel (spec 003).
+      parameters:
+        - $ref: '#/components/parameters/CsrfHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [items]
+              additionalProperties: false
+              properties:
+                items:
+                  type: array
+                  minItems: 1
+                  items:
+                    $ref: '#/components/schemas/CreateCodeRequest'
+      responses:
+        '200':
+          description: Per-item results in input order.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [results]
+                properties:
+                  results:
+                    type: array
+                    items:
+                      type: object
+                      required: [index, status]
+                      properties:
+                        index: { type: integer }
+                        status: { type: string, enum: [created, existing, error] }
+                        code:
+                          $ref: '#/components/schemas/Code'
+                        error:
+                          $ref: '#/components/schemas/ErrorDetail'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '413':
+          description: More items than `codes.batch_max`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '5XX':
+          description: Unexpected server error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /v1/codes/{id}/analytics:
     get:
@@ -1564,7 +1631,22 @@ components:
         image_url:
           type: string
           format: uri
-          description: Where the persisted rendered image can be fetched (`GET /i/{id}.{ext}`).
+          description: >-
+            Where the persisted image can be fetched. With `images.url_mode=instance`
+            (default) this is this instance's `GET /i/{id}.png`; with `public` it is
+            `<images.public_base_url>/<blob key>`; with `presigned` it is a signed S3 link
+            valid for `images.presign_ttl` (spec 003).
+        storage_url:
+          type: string
+          format: uri
+          description: >-
+            The image's address in the blob store, independent of this instance: the
+            public URL when a base URL is configured, else a presigned link. Present only
+            when the blob driver can derive one (S3); absent with the filesystem driver.
+        client_ref:
+          type: string
+          maxLength: 128
+          description: Caller-chosen idempotency key, unique per user. Present when supplied at creation.
         scan_url:
           type: string
           format: uri
@@ -1606,6 +1688,14 @@ components:
       additionalProperties: false
       required: [destination]
       properties:
+        client_ref:
+          type: string
+          maxLength: 128
+          description: >-
+            Optional idempotency key, unique per user. Re-posting the same `client_ref`
+            with the same destination and mode returns the existing code instead of
+            creating another; with a different destination it is refused with
+            `client_ref_conflict`.
         mode:
           $ref: '#/components/schemas/CodeMode'
         destination:

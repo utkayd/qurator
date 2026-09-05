@@ -356,12 +356,13 @@ type codeView struct {
 }
 
 type codeDetailData struct {
-	Code      codeView
-	ImageURL  string
-	Analytics *domain.AnalyticsResult
-	From      string
-	To        string
-	Error     string
+	Code       codeView
+	ImageURL   string
+	StorageURL string
+	Analytics  *domain.AnalyticsResult
+	From       string
+	To         string
+	Error      string
 }
 
 func (h *Handler) getCodeDetail(w http.ResponseWriter, r *http.Request) {
@@ -389,12 +390,20 @@ func (h *Handler) getCodeDetail(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// The storage URL is a supplementary display field (FR-208): a failure or absence
+	// here is never fatal to the page, it just means the row is omitted.
+	var storageURL string
+	if url, ok, err := h.deps.Codes.StorageURL(r.Context(), user.ID, id); err == nil && ok {
+		storageURL = url
+	}
+
 	h.render(w, r, http.StatusOK, "code_detail.html", code.ShortCode, codeDetailData{
-		Code:      codeView{Code: code, ScanURL: "/r/" + code.ShortCode, Mode: codeMode(code)},
-		ImageURL:  "/i/" + code.ID + ".png",
-		Analytics: analytics,
-		From:      from.Format("2006-01-02"),
-		To:        to.Format("2006-01-02"),
+		Code:       codeView{Code: code, ScanURL: "/r/" + code.ShortCode, Mode: codeMode(code)},
+		ImageURL:   "/i/" + code.ID + ".png",
+		StorageURL: storageURL,
+		Analytics:  analytics,
+		From:       from.Format("2006-01-02"),
+		To:         to.Format("2006-01-02"),
 	})
 }
 

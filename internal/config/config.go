@@ -102,10 +102,34 @@ type ForwardAuthConfig struct {
 	TrustedCIDRs []string `koanf:"trusted_cidrs"`
 }
 
-// CodesConfig controls short-code creation policy.
+// CodesConfig controls short-code creation policy and batch creation limits
+// (spec 003, FR-205/FR-207).
 type CodesConfig struct {
 	AllowedSchemes      []string `koanf:"allowed_schemes"`
 	FallbackDestination string   `koanf:"fallback_destination"`
+	// BatchMax caps the item count of one POST /v1/codes/batch request.
+	BatchMax int `koanf:"batch_max"`
+	// BatchWorkers bounds how many batch items render concurrently.
+	BatchWorkers int `koanf:"batch_workers"`
+}
+
+// ImagesConfig controls how code images are addressed and whether this
+// instance serves them at all (spec 003, FR-201).
+type ImagesConfig struct {
+	// URLMode selects what image_url points at: "instance" (this instance's
+	// /i/{id}.png), "public" (PublicBaseURL + "/" + blob key) or "presigned"
+	// (a signed S3 link valid for PresignTTL).
+	URLMode string `koanf:"url_mode"`
+	// PublicBaseURL is the externally reachable root of the bucket or the CDN
+	// in front of it. Required for url_mode=public; normalised without a
+	// trailing slash by Validate.
+	PublicBaseURL string `koanf:"public_base_url"`
+	// PresignTTL is the lifetime of presigned links.
+	PresignTTL time.Duration `koanf:"presign_ttl"`
+	// ServeViaInstance, when false, makes GET /i/{file} answer 404 for every
+	// id (FR-204). It cannot be false while url_mode is instance: there would
+	// be no way to reach any image.
+	ServeViaInstance bool `koanf:"serve_via_instance"`
 }
 
 // RenderConfig bounds QR rendering resource usage.
@@ -139,6 +163,7 @@ type Config struct {
 	Ephemeral   EphemeralConfig   `koanf:"ephemeral"`
 	ForwardAuth ForwardAuthConfig `koanf:"forward_auth"`
 	Codes       CodesConfig       `koanf:"codes"`
+	Images      ImagesConfig      `koanf:"images"`
 	Render      RenderConfig      `koanf:"render"`
 	Analytics   AnalyticsConfig   `koanf:"analytics"`
 	Log         LogConfig         `koanf:"log"`
@@ -187,6 +212,13 @@ func defaults() map[string]any {
 
 		"codes.allowed_schemes":      []string{"http", "https"},
 		"codes.fallback_destination": "",
+		"codes.batch_max":            500,
+		"codes.batch_workers":        4,
+
+		"images.url_mode":           "instance",
+		"images.public_base_url":    "",
+		"images.presign_ttl":        "1h",
+		"images.serve_via_instance": true,
 
 		"render.max_px":            4096,
 		"render.max_duration":      "2s",
@@ -259,6 +291,13 @@ var leafFields = []fieldSpec{
 
 	{"codes.allowed_schemes", kStringSlice},
 	{"codes.fallback_destination", kString},
+	{"codes.batch_max", kInt},
+	{"codes.batch_workers", kInt},
+
+	{"images.url_mode", kString},
+	{"images.public_base_url", kString},
+	{"images.presign_ttl", kDuration},
+	{"images.serve_via_instance", kBool},
 
 	{"render.max_px", kInt},
 	{"render.max_duration", kDuration},
@@ -376,6 +415,13 @@ func flagSet() *flag.FlagSet {
 
 	fs.StringSlice("codes-allowed-schemes", nil, "destination URI schemes permitted at creation")
 	fs.String("codes-fallback-destination", "", "destination used when a code has none configured")
+	fs.Int("codes-batch-max", 0, "maximum items in one batch create request")
+	fs.Int("codes-batch-workers", 0, "concurrent image renders per batch create request")
+
+	fs.String("images-url-mode", "", "how image_url is built (instance|public|presigned)")
+	fs.String("images-public-base-url", "", "public root of the bucket or CDN for images.url_mode=public")
+	fs.Duration("images-presign-ttl", 0, "lifetime of presigned image links")
+	fs.Bool("images-serve-via-instance", true, "serve images at /i/{id}.png on this instance")
 
 	fs.Int("render-max-px", 0, "maximum QR raster dimension in pixels")
 	fs.Duration("render-max-duration", 0, "maximum time budget for a single render")
