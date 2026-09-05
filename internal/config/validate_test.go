@@ -392,3 +392,18 @@ func TestConfig_JSONRoundTripHidesSecrets(t *testing.T) {
 		t.Fatalf("marshaled Config leaked the signing secret: %s", b)
 	}
 }
+
+func TestValidate_RefusesTrustEveryoneCIDR(t *testing.T) {
+	cfg := validConfig()
+	cfg.ForwardAuth.Enabled = true
+	for _, cidr := range []string{"0.0.0.0/0", "::/0"} {
+		cfg.ForwardAuth.TrustedCIDRs = []string{cidr}
+		if err := cfg.Validate(); err == nil {
+			t.Errorf("trusted CIDR %q must be refused", cidr)
+		}
+	}
+	cfg.ForwardAuth.TrustedCIDRs = []string{"10.0.0.0/8"}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("10.0.0.0/8 should validate: %v", err)
+	}
+}

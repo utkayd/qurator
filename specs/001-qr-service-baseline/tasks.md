@@ -345,8 +345,8 @@ architectures.
 - [x] T107 (Stream 0) Write `tests/integration/stall_test.go` — swap in a `Store` whose `InsertScanBatch` blocks forever; run 10,000 redirects with `hey`-equivalent in-process load; assert p99 < 50ms and `qurator_scan_events_dropped_total` > 0 (SC-005, Principle IV)
 - [x] T108 (Stream 0) Write `tests/integration/zeroconfig_test.go` — `exec` the built binary with `env -i PATH=...` in a temp dir, assert it serves `/healthz` and `/v1/qr` (with dev mode? NO — assert it REFUSES with the signing-secret message, then passes with `QURATOR_DEV_MODE=1`) (SC-002, FR-040)
 - [x] T109 (Stream 0) Execute every scenario in `quickstart.md` by hand against the merged build on SQLite+fs, then via `deploy/compose.yaml` on Postgres+S3; record results in `specs/001-qr-service-baseline/checklists/quickstart-results.md`
-- [ ] T110 (Stream 0) Run `/speckit-analyze` for cross-artifact consistency, then `/security-review` on the branch; fix findings; ensure `make build test lint bench` green and `tests/arch` green
-- [ ] T111 (Stream 0) Open the PR to `main` with the quickstart results linked; tag `v1.0.0-rc1` after merge and confirm `release.yml` publishes a multi-arch image that runs as non-root
+- [x] T110 (Stream 0) Run `/speckit-analyze` for cross-artifact consistency, then `/security-review` on the branch; fix findings; ensure `make build test lint bench` green and `tests/arch` green
+- [x] T111 (Stream 0) Open the PR to `main` with the quickstart results linked; tag `v1.0.0-rc1` after merge and confirm `release.yml` publishes a multi-arch image that runs as non-root
 - [x] T112 (Stream 0) Add BenchmarkRedirectWarm/Cold in internal/httpapi/public/bench_test.go and gate them in .github/workflows/bench.yml (analysis C2)
 - [x] T113 (Stream 0) Rate-limit POST /v1/auth/signin on the public group via Options.SigninLimiter with a router test (analysis I2)
 - [x] T114 (Stream 0) Reject future-dated and expired session tokens with a 60s leeway; tests in internal/auth (analysis G4)

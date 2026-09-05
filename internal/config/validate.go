@@ -38,7 +38,11 @@ func (c *Config) Validate() error {
 				"(refusing to trust the identity header from any peer)"))
 	}
 	for _, cidr := range c.ForwardAuth.TrustedCIDRs {
-		if _, _, err := net.ParseCIDR(cidr); err != nil {
+		if _, ipnet, err := net.ParseCIDR(cidr); err == nil {
+			if ones, _ := ipnet.Mask.Size(); ones == 0 {
+				errs = append(errs, fmt.Errorf("config: forward_auth.trusted_cidrs contains %q, which trusts every peer on the internet; list only your proxy's addresses", cidr))
+			}
+		} else {
 			errs = append(errs, fmt.Errorf("config: forward_auth.trusted_cidrs: invalid CIDR %q: %w", cidr, err))
 		}
 	}
