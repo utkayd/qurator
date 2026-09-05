@@ -27,7 +27,7 @@ jobs:
 
       - name: Benchmark PR head
         run: |
-          go test -run '^$' -bench 'BenchmarkRender|BenchmarkRecord|BenchmarkRedirect' -count=10 -benchmem \
+          go test -run '^$' -bench 'BenchmarkRender|BenchmarkRecord$|BenchmarkRedirect' -count=10 -benchmem \
             ./internal/qr/... ./internal/analytics/... ./internal/httpapi/public/... | tee new.txt
 
       - name: Checkout base ref into a sibling directory
@@ -37,7 +37,7 @@ jobs:
       - name: Benchmark base ref
         working-directory: ../base-ref
         run: |
-          go test -run '^$' -bench 'BenchmarkRender|BenchmarkRecord|BenchmarkRedirect' -count=10 -benchmem \
+          go test -run '^$' -bench 'BenchmarkRender|BenchmarkRecord$|BenchmarkRedirect' -count=10 -benchmem \
             ./internal/qr/... ./internal/analytics/... ./internal/httpapi/public/... | tee "${GITHUB_WORKSPACE}/old.txt"
 
       - name: Compare with benchstat
@@ -48,6 +48,9 @@ jobs:
           cat benchstat.txt >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
 
+      # Gated set: Render (Principle III), Record drop path (Principle IV, 0 allocs, ±1%),
+      # Redirect. BenchmarkRecordAccepted is deliberately NOT gated: its bytes/op are
+      # amortised worker batch allocations and swing ±5-7% run to run, above the threshold.
       - name: Fail on significant regressions of 5% or more
         run: |
           # benchstat prints "~" when a change is not statistically significant and a
