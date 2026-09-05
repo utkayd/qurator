@@ -2,9 +2,9 @@ name: bench
 
 # Guards the constitutionally protected hot paths (Principle III: ephemeral render;
 # Principle IV: the redirect handler and the scan recorder) against performance
-# regressions. Compares this PR's
-# benchmarks against its base with benchstat and fails on any statistically real
-# regression (research.md §6: "fail on any non-`~` positive delta").
+# regressions. Runs this PR's benchmarks interleaved with its base's, compares with
+# benchstat, fails on statistically significant regressions of 5% or more, and surfaces
+# smaller significant deltas as warnings.
 on:
   pull_request:
 
@@ -25,20 +25,41 @@ jobs:
       - name: Install benchstat
         run: go install golang.org/x/perf/cmd/benchstat@latest
 
-      - name: Benchmark PR head
-        run: |
-          go test -run '^$' -bench 'BenchmarkRender|BenchmarkRecord$|BenchmarkRedirect' -count=10 -benchmem \
-            ./internal/qr/... ./internal/analytics/... ./internal/httpapi/public/... | tee new.txt
-
       - name: Checkout base ref into a sibling directory
         run: |
           git worktree add ../base-ref "origin/${{ github.event.pull_request.base.ref }}"
 
-      - name: Benchmark base ref
-        working-directory: ../base-ref
+      # Base and head are run INTERLEAVED, one iteration each, ten times. Running all of
+      # base then all of head puts any runner drift (thermal, noisy neighbour, frequency
+      # scaling) entirely on one side and shows up as a 5% "regression" in untouched code.
+      # Compiling the test binaries once also removes build-cache effects from the timing.
+      - name: Compile benchmark binaries for base and head
         run: |
-          go test -run '^$' -bench 'BenchmarkRender|BenchmarkRecord$|BenchmarkRedirect' -count=10 -benchmem \
-            ./internal/qr/... ./internal/analytics/... ./internal/httpapi/public/... | tee "${GITHUB_WORKSPACE}/old.txt"
+          set -e
+          PKGS="internal/qr internal/analytics internal/httpapi/public"
+          mkdir -p bins/base bins/head
+          for pkg in $PKGS; do
+            name=$(echo "$pkg" | tr '/' '_')
+            go test -c -o "bins/head/$name.test" "./$pkg"
+            (cd ../base-ref && go test -c -o "${GITHUB_WORKSPACE}/bins/base/$name.test" "./$pkg")
+          done
+
+      - name: Run interleaved benchmarks
+        run: |
+          set -e
+          : > old.txt; : > new.txt
+          for i in $(seq 1 10); do
+            for side in base head; do
+              out=old.txt; [ "$side" = head ] && out=new.txt
+              for bin in bins/$side/*.test; do
+                pkgdir=$(basename "$bin" .test | tr '_' '/')
+                (cd "$pkgdir" 2>/dev/null || cd "../base-ref/$pkgdir"; \
+                 "${GITHUB_WORKSPACE}/$bin" -test.run '^$' -test.bench 'BenchmarkRender|BenchmarkRecord$|BenchmarkRedirect' \
+                   -test.count=1 -test.benchmem) >> "$out"
+              done
+            done
+          done
+          echo "--- head ---"; grep -c Benchmark new.txt; echo "--- base ---"; grep -c Benchmark old.txt
 
       - name: Compare with benchstat
         run: |
