@@ -133,6 +133,44 @@ Authelia's forward-auth response sets `Remote-Email`; point
 value as (e.g. `X-Forwarded-Email` after an nginx `auth_request` rewrite), and again
 scope `QURATOR_FORWARD_AUTH_TRUSTED_CIDRS` to the proxy's own address, not the internet.
 
+## Image URLs: through qurator, or straight from your bucket
+
+By default every code's `image_url` points at this instance (`/i/{id}.png`), served from
+the blob store with long-lived cache headers. If you keep images in S3-compatible storage
+you can take qurator out of that path entirely:
+
+| `QURATOR_IMAGES_URL_MODE` | `image_url` becomes | Needs |
+|---|---|---|
+| `instance` (default) | `https://your-instance/i/{id}.png` | nothing |
+| `public` | `QURATOR_IMAGES_PUBLIC_BASE_URL` + `/` + object key — permanent | a readable bucket, or a CDN in front of it |
+| `presigned` | a signed link to the S3 endpoint, valid for `QURATOR_IMAGES_PRESIGN_TTL` (default `1h`) | nothing; works with a private bucket |
+
+Whatever the mode, responses also carry `storage_url` — the object's own address —
+whenever the S3 driver is in use, so a client can choose either without a redeploy. Set
+`QURATOR_IMAGES_SERVE_VIA_INSTANCE=false` to make `/i/…` return 404 when you never want
+qurator serving images; startup refuses that with `url_mode=instance`, since nothing
+could reach an image.
+
+## Creating many codes at once
+
+`POST /v1/codes/batch` takes up to `QURATOR_CODES_BATCH_MAX` (default 500) items, each the
+same shape as a single create plus an optional `client_ref`. Results come back per item in
+order — the created code, the existing code when that `client_ref` was already used with
+the same destination and mode, or an error for that item alone — so one bad destination
+never fails the batch. Metadata is written in one transaction; images render in parallel.
+
+`client_ref` is what makes retries safe: re-send the same batch after a timeout and you
+get the same codes back, not duplicates. Re-using a `client_ref` with a *different*
+destination is refused with `client_ref_conflict` and the existing code's id.
+
+```bash
+curl -s -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"items":[
+        {"client_ref":"sku-1001","destination":"https://shop.example/p/1001","mode":"direct"},
+        {"client_ref":"sku-1002","destination":"https://shop.example/p/1002"}
+      ]}' http://127.0.0.1:8080/v1/codes/batch
+```
+
 ## Privacy, by construction
 
 - Redirects are `302 Found` with `Cache-Control: no-store, no-cache, must-revalidate`.
