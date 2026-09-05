@@ -1036,6 +1036,11 @@ input[type="color"].swatch::-moz-color-swatch {
   display: block;
 }
 
+/* [hidden] must win over the display:block below, or the empty state shows a broken image. */
+.preview-tile img[hidden] {
+  display: none;
+}
+
 .preview-tile img {
   display: block;
   width: 100%;
