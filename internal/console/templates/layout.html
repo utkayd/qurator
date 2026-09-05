@@ -1,0 +1,41 @@
+{{define "layout"}}<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{.Title}} — qurator</title>
+  <link rel="stylesheet" href="{{.AppCSSURL}}" nonce="{{.Nonce}}">
+  <meta name="htmx-config" content="{&quot;allowEval&quot;:false,&quot;selfRequestsOnly&quot;:true,&quot;allowScriptTags&quot;:false}">
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="site">
+    <strong>qurator</strong>
+    {{if .User}}
+    <nav aria-label="Primary">
+      <a href="/ui/">Codes</a>
+      <a href="/ui/codes/new">New code</a>
+      <a href="/ui/tokens">Tokens</a>
+      <form method="post" action="/ui/signout" hx-post="/ui/signout" hx-target="body" hx-swap="outerHTML" style="display:inline">
+        <button type="submit">Sign out ({{.User.Email}})</button>
+      </form>
+    </nav>
+    {{end}}
+  </header>
+  <main id="main">
+    {{template "content" .Content}}
+  </main>
+
+  <dialog data-confirm-dialog>
+    <p data-confirm-text></p>
+    <form method="dialog" class="dialog-actions">
+      <button value="cancel">Cancel</button>
+      <button value="confirm" class="danger" autofocus>Confirm</button>
+    </form>
+  </dialog>
+
+  <script src="{{.HtmxURL}}" nonce="{{.Nonce}}"></script>
+  <script src="{{.AppJSURL}}" nonce="{{.Nonce}}"></script>
+</body>
+</html>
+{{end}}

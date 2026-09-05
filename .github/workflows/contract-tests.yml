@@ -1,0 +1,40 @@
+name: contract-tests
+on:
+  push:
+    branches:
+    - main
+  pull_request: null
+permissions:
+  contents: read
+jobs:
+  contract-tests:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: qurator
+          POSTGRES_PASSWORD: qurator
+          POSTGRES_DB: qurator
+        ports:
+        - 5432:5432
+        options: --health-cmd "pg_isready -U qurator -d qurator" --health-interval 5s --health-timeout 5s --health-retries
+          10
+    env:
+      QURATOR_TEST_PG_DSN: postgres://qurator:qurator@localhost:5432/qurator?sslmode=disable
+      QURATOR_TEST_S3_ENDPOINT: localhost:9000
+      QURATOR_TEST_S3_ACCESS_KEY: qurator
+      QURATOR_TEST_S3_SECRET_KEY: qurator-dev-secret
+    steps:
+    - uses: actions/checkout@v4
+    - name: 'Start MinIO (services: cannot pass the required `server` argument)'
+      run: 'docker run -d --name minio -p 9000:9000 -e MINIO_ROOT_USER=qurator -e MINIO_ROOT_PASSWORD=qurator-dev-secret minio/minio
+        server /data
+
+        for i in $(seq 1 30); do curl -fsS http://127.0.0.1:9000/minio/health/live && break; sleep 1; done'
+    - uses: actions/setup-go@v5
+      with:
+        go-version-file: go.mod
+    - name: Wait for MinIO bucket readiness
+      run: "for i in $(seq 1 20); do\n  curl -sf http://localhost:9000/minio/health/ready && break\n  sleep 2\ndone\n"
+    - run: go test -race ./...

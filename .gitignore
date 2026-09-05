@@ -1,7 +1,7 @@
 # Binaries
 /bin/
 /dist/
-qurator
+/qurator
 *.exe
 
 # Test & coverage

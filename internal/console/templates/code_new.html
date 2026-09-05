@@ -1,0 +1,65 @@
+{{define "content"}}
+<h1>New code</h1>
+{{if .Error}}<p class="error-banner" role="alert">{{.Error}}</p>{{end}}
+<div class="two-col">
+  <form class="stack" data-preview-form hx-post="/ui/codes" hx-target="body" hx-swap="outerHTML">
+    <div class="field">
+      <label for="destination">Destination URL</label>
+      <input type="url" id="destination" name="destination" required value="{{.Destination}}"
+             placeholder="example.com/spring-sale (https://)">
+    </div>
+    <div class="field">
+      <label for="alias">Custom alias (optional)</label>
+      <input type="text" id="alias" name="alias" value="{{.Alias}}" placeholder="spring-sale">
+      <span class="help">Leave blank for a generated short code. Aliases cannot be changed later.</span>
+    </div>
+    <div class="field">
+      <label for="format">Image format</label>
+      <select id="format" name="format">
+        <option value="png" {{if eq .Format "png"}}selected{{end}}>PNG</option>
+        <option value="svg" {{if eq .Format "svg"}}selected{{end}}>SVG</option>
+      </select>
+    </div>
+    <div class="field">
+      <label for="fg_color">Foreground colour</label>
+      <input type="color" id="fg_color" name="fg_color" value="{{.FgColor}}">
+    </div>
+    <div class="field">
+      <label for="bg_color">Background colour</label>
+      <input type="color" id="bg_color" name="bg_color" value="{{.BgColor}}">
+    </div>
+    <div class="field">
+      <label for="module_shape">Module shape</label>
+      <select id="module_shape" name="module_shape">
+        <option value="square" {{if eq .ModuleShape "square"}}selected{{end}}>Square</option>
+        <option value="dot" {{if eq .ModuleShape "dot"}}selected{{end}}>Dot</option>
+        <option value="rounded" {{if eq .ModuleShape "rounded"}}selected{{end}}>Rounded</option>
+      </select>
+    </div>
+    <div class="field">
+      <label for="margin_modules">Margin (modules)</label>
+      <input type="number" id="margin_modules" name="margin_modules" min="4" max="64" value="{{.MarginModules}}">
+    </div>
+    <div class="field">
+      <label for="size_px">Size (pixels)</label>
+      <input type="number" id="size_px" name="size_px" min="64" max="4096" value="{{.SizePx}}">
+    </div>
+    <div class="field">
+      <label for="ec_level">Error correction level</label>
+      <select id="ec_level" name="ec_level">
+        <option value="L" {{if eq .ECLevel "L"}}selected{{end}}>L</option>
+        <option value="M" {{if eq .ECLevel "M"}}selected{{end}}>M</option>
+        <option value="Q" {{if eq .ECLevel "Q"}}selected{{end}}>Q</option>
+        <option value="H" {{if eq .ECLevel "H"}}selected{{end}}>H</option>
+      </select>
+    </div>
+    <button type="submit" class="primary">Create code</button>
+  </form>
+  <div class="preview">
+    <h2>Live preview</h2>
+    <img data-preview-image src="" alt="Live QR code preview" width="256" height="256">
+    <p data-preview-status class="help" aria-live="polite"></p>
+    <p class="help">The preview renders with today's destination text; the printed code always encodes this instance's own scan address so it keeps working even after the destination changes.</p>
+  </div>
+</div>
+{{end}}

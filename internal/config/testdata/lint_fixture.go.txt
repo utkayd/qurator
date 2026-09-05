@@ -1,0 +1,22 @@
+// This file is a .txt, not a .go, so it is never compiled into the
+// internal/config package. It exists solely as a fixture: copy it to a
+// *.go file (or lint it directly with golangci-lint's --path override) to
+// prove the forbidigo rule in .golangci.yml actually fires on the one leak
+// config.Secret's type design cannot prevent — a bare string(...) cast.
+//
+// See research.md §6 ("Decision: a Secret type — with a documented hole")
+// and .golangci.yml's forbidigo pattern:
+//   ^string\(.*[sS]ecret.*\)$
+
+package config
+
+import "fmt"
+
+func leakSigningSecret(cfg *Config) {
+	// THIS LINE is what the forbidigo rule must flag: casting a
+	// config.Secret to string bypasses every redaction hook on the type
+	// (String, GoString, MarshalJSON, MarshalText, LogValue) and hands
+	// back the raw value.
+	leaked := string(cfg.Auth.SigningSecret)
+	fmt.Println(leaked)
+}
