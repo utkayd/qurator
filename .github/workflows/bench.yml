@@ -54,7 +54,10 @@ jobs:
           # significant. Any other delta column value that is a positive percentage
           # (a regression: slower or more allocations/bytes) fails the job — a negative
           # delta (an improvement) or "~" is fine.
-          if grep -E '\+[0-9]+(\.[0-9]+)?%' benchstat.txt; then
+          # Only per-benchmark rows count: benchstat prints "(p=0.xxx n=N)" next to a
+          # significant delta and "~" otherwise, while geomean summary lines always show a
+          # raw percentage and must be ignored.
+          if grep -v geomean benchstat.txt | grep -E '\+[0-9]+(\.[0-9]+)?%.*\(p='; then
             echo "::error::Statistically significant regression detected — see the lines above."
             exit 1
           fi
