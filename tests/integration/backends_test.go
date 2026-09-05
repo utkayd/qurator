@@ -207,6 +207,19 @@ func itLifecycle(t *testing.T, p *itProc) []itStep {
 			steps[len(steps)-1].Detail = "alias=" + str(det, "alias")
 		}
 	}
+
+	// Spec 002 / SC-105: a direct code persists its mode, offers no scan address, and
+	// refuses a destination change with the stable code — identically on every backend.
+	direct := rec("create direct", s.itDo(http.MethodPost, "/v1/codes", map[string]any{"destination": dest1, "alias": alias + "-direct", "mode": "direct"}, nil), "")
+	_, hasScanURL := direct.JSON["scan_url"]
+	steps[len(steps)-1].Detail = fmt.Sprintf("mode=%s has_scan_url=%t", str(direct.JSON, "mode"), hasScanURL)
+	directID := str(direct.JSON, "id")
+	immutable := rec("patch direct", s.itDo(http.MethodPatch, "/v1/codes/"+directID, map[string]any{"destination": dest2}, nil), "")
+	if d, ok := immutable.JSON["error"].(map[string]any); ok {
+		if det, ok := d["details"].(map[string]any); ok {
+			steps[len(steps)-1].Detail = "mode=" + str(det, "mode")
+		}
+	}
 	return steps
 }
 
@@ -226,6 +239,8 @@ var itWantLifecycle = []itStep{
 	{"get deleted", 200, "", "state=deleted"},
 	{"scan deleted", 200, "", ""},
 	{"recreate alias", 409, "alias_taken", "alias=it-matrix"},
+	{"create direct", 201, "", "mode=direct has_scan_url=false"},
+	{"patch direct", 409, "direct_code_immutable", "mode=direct"},
 }
 
 func itDiffSteps(a, b []itStep) string {

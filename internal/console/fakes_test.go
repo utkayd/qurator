@@ -125,6 +125,10 @@ func (f *fakeCodes) Create(_ context.Context, userID string, in CreateCodeInput)
 	if short == "" {
 		short = fmt.Sprintf("short%d", f.next)
 	}
+	mode := in.Mode
+	if mode == "" {
+		mode = modeDynamic
+	}
 	now := time.Now().UTC()
 	c := domain.Code{
 		ID:          id,
@@ -133,6 +137,7 @@ func (f *fakeCodes) Create(_ context.Context, userID string, in CreateCodeInput)
 		UserID:      userID,
 		Destination: in.Destination,
 		State:       domain.CodeActive,
+		Mode:        domain.CodeMode(mode),
 		Styling: domain.Styling{
 			FgColor:          in.Styling.FgColor,
 			BgColor:          in.Styling.BgColor,

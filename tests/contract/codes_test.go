@@ -25,6 +25,7 @@ import (
 	"github.com/utkayd/qurator/internal/qr"
 	"github.com/utkayd/qurator/internal/store"
 	"github.com/utkayd/qurator/internal/store/storetest"
+	"github.com/utkayd/qurator/tools/qrdecode/decode"
 )
 
 const (
@@ -549,4 +550,177 @@ func TestCodes_LogoOnDynamicCode(t *testing.T) {
 	if code, details := errCodeCodes(t, body); res.StatusCode != http.StatusBadRequest || code != "invalid_request" || details["field"] != "styling.logo.image_base64" {
 		t.Fatalf("bad base64: %d %v", res.StatusCode, body)
 	}
+}
+
+// ---- feature 002: direct codes ---------------------------------------------------------
+
+// TestCodes_DirectModeEncodesDestination pins FR-101/FR-102/FR-106: a direct code's
+// stored PNG decodes (with the independent decoder) to the destination itself, the
+// response says so via `mode`, and no scan address is offered for it.
+func TestCodes_DirectModeEncodesDestination(t *testing.T) {
+	renderer := qr.NewRenderer(qr.Bounds{MaxPx: 1024, MaxDuration: 0, MaxPayload: 2953})
+	f := newFixtureWith(t, nil, "", realRenderer{renderer})
+
+	const dest = "https://example.com/direct?campaign=print"
+	c := f.create(t, "alice", map[string]any{"destination": dest, "mode": "direct"})
+	if c["mode"] != "direct" {
+		t.Fatalf("mode = %v, want direct", c["mode"])
+	}
+	if _, present := c["scan_url"]; present {
+		t.Fatalf("direct code must omit scan_url entirely, got %v", c["scan_url"])
+	}
+	id := c["id"].(string)
+	if c["image_url"] != testBaseURL+"/i/"+id+".png" {
+		t.Fatalf("image_url = %v", c["image_url"])
+	}
+
+	rc, _, err := f.blob.Get(context.Background(), codes.BlobKeyFor(id))
+	if err != nil {
+		t.Fatalf("image blob missing: %v", err)
+	}
+	raw, _ := io.ReadAll(rc)
+	_ = rc.Close()
+	res, err := decode.PNG(raw)
+	if err != nil {
+		t.Fatalf("decode stored PNG: %v", err)
+	}
+	if string(res.Bytes) != dest {
+		t.Fatalf("direct image decodes to %q, want the destination %q", res.Bytes, dest)
+	}
+
+	// GET and list carry the same representation: mode present, scan_url absent.
+	for _, path := range []string{"/v1/codes/" + id, "/v1/codes"} {
+		r, body := f.do(t, "alice", http.MethodGet, path, nil, nil)
+		if r.StatusCode != http.StatusOK {
+			t.Fatalf("GET %s: %d %v", path, r.StatusCode, body)
+		}
+		item := body
+		if items, ok := body["items"].([]any); ok {
+			if len(items) != 1 {
+				t.Fatalf("list: %d items, want 1", len(items))
+			}
+			item = items[0].(map[string]any)
+		}
+		if item["mode"] != "direct" {
+			t.Fatalf("GET %s: mode = %v", path, item["mode"])
+		}
+		if _, present := item["scan_url"]; present {
+			t.Fatalf("GET %s: scan_url must be absent for a direct code", path)
+		}
+	}
+
+	// The short link still resolves (spec 002 edge case): it is a link click, not a scan
+	// of the printed image, and behaves like any dynamic code.
+	r, _ := f.do(t, "", http.MethodGet, "/r/"+c["short_code"].(string), nil, nil)
+	if r.StatusCode != http.StatusFound || r.Header.Get("Location") != dest {
+		t.Fatalf("/r/ on direct code: %d Location=%q", r.StatusCode, r.Header.Get("Location"))
+	}
+
+	// Styling applies identically (US1 scenario 5).
+	styled := f.create(t, "alice", map[string]any{
+		"destination": dest, "mode": "direct",
+		"styling": map[string]any{"module_shape": "dot", "ec_level": "Q", "fg_color": "#102030"},
+	})
+	if st := styled["styling"].(map[string]any); st["module_shape"] != "dot" || st["ec_level"] != "Q" || st["fg_color"] != "#102030" {
+		t.Fatalf("direct styling not applied: %v", st)
+	}
+}
+
+// TestCodes_ModeDefaultsToDynamic pins SC-104: omitting mode is byte-for-byte the v1
+// behaviour — mode reads back as dynamic, scan_url is present, and the image encodes the
+// scan URL rather than the destination.
+func TestCodes_ModeDefaultsToDynamic(t *testing.T) {
+	f := newFixture(t, nil, "")
+	c := f.create(t, "alice", map[string]any{"destination": "https://example.com/default"})
+	if c["mode"] != "dynamic" {
+		t.Fatalf("mode = %v, want dynamic", c["mode"])
+	}
+	sc := c["short_code"].(string)
+	if c["scan_url"] != testBaseURL+"/r/"+sc {
+		t.Fatalf("scan_url = %v", c["scan_url"])
+	}
+	explicit := f.create(t, "alice", map[string]any{"destination": "https://example.com/explicit", "mode": "dynamic"})
+	if explicit["mode"] != "dynamic" || explicit["scan_url"] == nil {
+		t.Fatalf("explicit dynamic: %v", explicit)
+	}
+	res, body := f.do(t, "alice", http.MethodPost, "/v1/codes", map[string]any{"destination": "https://example.com/", "mode": "static"}, nil)
+	if code, details := errCodeCodes(t, body); res.StatusCode != http.StatusBadRequest || code != "invalid_request" || details["field"] != "mode" {
+		t.Fatalf("unknown mode: %d %v", res.StatusCode, body)
+	}
+}
+
+// TestCodes_DirectIsImmutable pins FR-104/SC-103: destination updates, disable and
+// enable on a direct code are refused with direct_code_immutable, and nothing changes.
+func TestCodes_DirectIsImmutable(t *testing.T) {
+	f := newFixture(t, nil, "")
+	c := f.create(t, "alice", map[string]any{"destination": "https://example.com/printed", "mode": "direct", "alias": "printed-flyer"})
+	id := c["id"].(string)
+
+	attempts := []struct {
+		name, method, path string
+		body               any
+		hdr                map[string]string
+	}{
+		{"patch", http.MethodPatch, "/v1/codes/" + id, map[string]any{"destination": "https://example.com/changed"}, nil},
+		{"patch If-Match", http.MethodPatch, "/v1/codes/" + id, map[string]any{"destination": "https://example.com/changed"}, map[string]string{"If-Match": `"1"`}},
+		{"patch bad scheme", http.MethodPatch, "/v1/codes/" + id, map[string]any{"destination": "ftp://example.com/"}, nil},
+		{"disable", http.MethodPost, "/v1/codes/" + id + "/disable", nil, nil},
+		{"enable", http.MethodPost, "/v1/codes/" + id + "/enable", nil, nil},
+	}
+	for _, a := range attempts {
+		res, body := f.do(t, "alice", a.method, a.path, a.body, a.hdr)
+		code, details := errCodeCodes(t, body)
+		if res.StatusCode != http.StatusConflict || code != "direct_code_immutable" {
+			t.Fatalf("%s on direct code: %d %v, want 409 direct_code_immutable", a.name, res.StatusCode, body)
+		}
+		if details["mode"] != "direct" {
+			t.Fatalf("%s: details.mode = %v, want direct", a.name, details["mode"])
+		}
+		msg, _ := body["error"].(map[string]any)["message"].(string)
+		if !strings.Contains(strings.ToLower(msg), "encoded") {
+			t.Fatalf("%s: message must say the destination is encoded in the image: %q", a.name, msg)
+		}
+	}
+	_, got := f.do(t, "alice", http.MethodGet, "/v1/codes/"+id, nil, nil)
+	if got["destination"] != "https://example.com/printed" || got["state"] != "active" || got["version"] != float64(1) {
+		t.Fatalf("direct code mutated by a refused request: %v", got)
+	}
+	// A non-owner still learns nothing (ownership before mode).
+	res, body := f.do(t, "bob", http.MethodPatch, "/v1/codes/"+id, map[string]any{"destination": "https://example.com/x"}, nil)
+	if code, _ := errCodeCodes(t, body); res.StatusCode != http.StatusNotFound || code != "not_found" {
+		t.Fatalf("PATCH direct as bob: %d %v", res.StatusCode, body)
+	}
+	// Delete still works (FR-109) and the short code stays reserved (FR-018).
+	if res, _ := f.do(t, "alice", http.MethodDelete, "/v1/codes/"+id, nil, nil); res.StatusCode != http.StatusNoContent {
+		t.Fatalf("DELETE direct: %d", res.StatusCode)
+	}
+	res, body = f.do(t, "alice", http.MethodPost, "/v1/codes", map[string]any{"destination": "https://example.com/", "alias": c["short_code"]}, nil)
+	if code, _ := errCodeCodes(t, body); res.StatusCode != http.StatusConflict || code != "alias_taken" {
+		t.Fatalf("short code of deleted direct code: %d %v", res.StatusCode, body)
+	}
+}
+
+// TestCodes_DirectDestinationTooLarge pins FR-103: a direct code's destination must fit
+// the symbol at the chosen level, rejected exactly as ephemeral generation rejects it.
+func TestCodes_DirectDestinationTooLarge(t *testing.T) {
+	renderer := qr.NewRenderer(qr.Bounds{MaxPx: 1024, MaxDuration: 0, MaxPayload: 2953})
+	f := newFixtureWith(t, nil, "", realRenderer{renderer})
+	long := "https://example.com/" + strings.Repeat("a", 1280) // 1,300 bytes > 1,273 at H
+
+	res, body := f.do(t, "alice", http.MethodPost, "/v1/codes", map[string]any{
+		"destination": long, "mode": "direct", "styling": map[string]any{"ec_level": "H"},
+	}, nil)
+	code, details := errCodeCodes(t, body)
+	if res.StatusCode != http.StatusRequestEntityTooLarge || code != "content_too_large" {
+		t.Fatalf("1300-byte direct destination at H: %d %v", res.StatusCode, body)
+	}
+	if details["limit_bytes"] != float64(qr.Capacity(domain.ECHigh)) || details["ec_level"] != "H" {
+		t.Fatalf("content_too_large details: %v", details)
+	}
+	if res, body := f.do(t, "alice", http.MethodGet, "/v1/codes", nil, nil); res.StatusCode != http.StatusOK || len(body["items"].([]any)) != 0 {
+		t.Fatalf("rejected direct create left a row behind: %v", body)
+	}
+	// The same destination fits at L, and a dynamic code never encodes it at all.
+	f.create(t, "alice", map[string]any{"destination": long, "mode": "direct", "styling": map[string]any{"ec_level": "L"}})
+	f.create(t, "alice", map[string]any{"destination": long, "styling": map[string]any{"ec_level": "H"}})
 }

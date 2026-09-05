@@ -373,6 +373,10 @@ func (s *Store) CreateCode(ctx context.Context, c *domain.Code) error {
 	if state == "" {
 		state = domain.CodeActive
 	}
+	mode := c.Mode
+	if mode == "" {
+		mode = domain.ModeDynamic
+	}
 	styling := c.Styling
 	if styling.ID == "" {
 		styling.ID = domain.NewID("sty")
@@ -384,9 +388,9 @@ func (s *Store) CreateCode(ctx context.Context, c *domain.Code) error {
 			string(styling.ECLevel), string(styling.ECLevelEffective), nullStr(styling.LogoBlobKey), nullFloat(styling.LogoScale)); err != nil {
 			return translate(err)
 		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO codes (id, short_code, is_alias, user_id, destination, state, styling_id, blob_key, blob_etag, version, created_at, updated_at, deleted_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, NULL)`,
-			c.ID, shortCode, b2i(c.IsAlias), c.UserID, c.Destination, string(state), styling.ID, c.BlobKey, c.BlobETag,
+		if _, err := tx.ExecContext(ctx, `INSERT INTO codes (id, short_code, is_alias, user_id, mode, destination, state, styling_id, blob_key, blob_etag, version, created_at, updated_at, deleted_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, NULL)`,
+			c.ID, shortCode, b2i(c.IsAlias), c.UserID, string(mode), c.Destination, string(state), styling.ID, c.BlobKey, c.BlobETag,
 			fmtTime(created), fmtTime(updated)); err != nil {
 			return translate(err)
 		}
@@ -408,6 +412,7 @@ func (s *Store) CreateCode(ctx context.Context, c *domain.Code) error {
 	c.ShortCode = shortCode
 	c.Version = 1
 	c.State = state
+	c.Mode = mode
 	c.Styling = styling
 	c.CreatedAt = created.UTC().Truncate(time.Microsecond)
 	c.UpdatedAt = updated.UTC().Truncate(time.Microsecond)
@@ -415,7 +420,7 @@ func (s *Store) CreateCode(ctx context.Context, c *domain.Code) error {
 	return nil
 }
 
-const codeCols = `c.id, c.short_code, c.is_alias, c.user_id, c.destination, c.state, c.blob_key, c.blob_etag, c.version, c.created_at, c.updated_at, c.deleted_at,
+const codeCols = `c.id, c.short_code, c.is_alias, c.user_id, c.mode, c.destination, c.state, c.blob_key, c.blob_etag, c.version, c.created_at, c.updated_at, c.deleted_at,
 	sp.id, sp.fg_color, sp.bg_color, sp.module_shape, sp.margin_modules, sp.size_px, sp.ec_level, sp.ec_level_effective, COALESCE(sp.logo_blob_key, ''), COALESCE(sp.logo_scale, 0)`
 
 const codeFrom = ` FROM codes c JOIN styling_profiles sp ON sp.id = c.styling_id `
@@ -424,6 +429,7 @@ func scanCode(row interface{ Scan(...any) error }) (*domain.Code, error) {
 	var (
 		c                domain.Code
 		isAlias          int
+		mode             string
 		state, shape, ec string
 		ecEff            string
 		created, updated string
@@ -433,12 +439,13 @@ func scanCode(row interface{ Scan(...any) error }) (*domain.Code, error) {
 		logoKey          string
 		logoScale        float64
 	)
-	if err := row.Scan(&c.ID, &c.ShortCode, &isAlias, &c.UserID, &c.Destination, &state, &c.BlobKey, &c.BlobETag, &c.Version, &created, &updated, &deleted,
+	if err := row.Scan(&c.ID, &c.ShortCode, &isAlias, &c.UserID, &mode, &c.Destination, &state, &c.BlobKey, &c.BlobETag, &c.Version, &created, &updated, &deleted,
 		&c.Styling.ID, &c.Styling.FgColor, &c.Styling.BgColor, &shape, &marginModules, &sizePx, &ec, &ecEff, &logoKey, &logoScale); err != nil {
 		return nil, translate(err)
 	}
 	var err error
 	c.IsAlias = isAlias != 0
+	c.Mode = domain.CodeMode(mode)
 	c.State = domain.CodeState(state)
 	c.Styling.ModuleShape = domain.ModuleShape(shape)
 	c.Styling.MarginModules = marginModules

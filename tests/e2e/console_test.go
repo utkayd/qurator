@@ -129,6 +129,10 @@ func (c *e2eCodes) Create(_ context.Context, userID string, in console.CreateCod
 	if short == "" {
 		short = fmt.Sprintf("short-e2e-%d", c.next)
 	}
+	mode := in.Mode
+	if mode == "" {
+		mode = "dynamic"
+	}
 	now := time.Now().UTC()
 	code := domain.Code{
 		ID:          id,
@@ -137,6 +141,7 @@ func (c *e2eCodes) Create(_ context.Context, userID string, in console.CreateCod
 		UserID:      userID,
 		Destination: in.Destination,
 		State:       domain.CodeActive,
+		Mode:        domain.CodeMode(mode),
 		Styling: domain.Styling{
 			FgColor: in.Styling.FgColor, BgColor: in.Styling.BgColor,
 			ModuleShape: in.Styling.ModuleShape, MarginModules: in.Styling.MarginModules,
@@ -515,6 +520,92 @@ func TestConsoleLifecycle(t *testing.T) {
 	if strings.Contains(finalListBody, "spring-sale-2026") {
 		t.Fatalf("deleted code's destination still appears in the list")
 	}
+}
+
+// TestConsoleDirectAndDynamicModes exercises US1 scenario 5 / US2 scenario 3 / US3
+// scenario 2 from specs/002-direct-codes/spec.md: a direct code's detail page hides the
+// destination-edit form and the disable/enable controls and replaces the analytics
+// section with an explanation, while a dynamic code's detail page still shows both.
+func TestConsoleDirectAndDynamicModes(t *testing.T) {
+	srv, client, auth := newTestServer(t)
+	auth.addUser(domain.User{ID: "usr_1", Email: "owner@example.com"}, "correct horse battery staple")
+
+	resp := doRequest(t, client, http.MethodPost, srv.URL+"/ui/signin", url.Values{
+		"email":    {"owner@example.com"},
+		"password": {"correct horse battery staple"},
+	}, false, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("sign-in failed: status=%d", resp.StatusCode)
+	}
+	_ = resp.Body.Close()
+
+	// Create a direct code via the form.
+	resp = doRequest(t, client, http.MethodPost, srv.URL+"/ui/codes", url.Values{
+		"destination": {"https://example.com/direct-target"},
+		"mode":        {"direct"},
+		"format":      {"png"},
+	}, true, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("create direct code: status %d, body: %s", resp.StatusCode, readBody(t, resp))
+	}
+	directPath := resp.Request.URL.Path
+	directBody := readBody(t, resp)
+
+	if !strings.Contains(directBody, "mode-direct") {
+		t.Fatalf("direct code detail page missing Direct badge:\n%s", directBody)
+	}
+	if strings.Contains(directBody, `id="destination"`) {
+		t.Fatalf("direct code detail page must not show a destination edit form:\n%s", directBody)
+	}
+	if strings.Contains(strings.ToLower(directBody), ">disable<") || strings.Contains(strings.ToLower(directBody), ">enable<") {
+		t.Fatalf("direct code detail page must not show disable/enable controls:\n%s", directBody)
+	}
+	if !strings.Contains(directBody, "there is nothing to count here") {
+		t.Fatalf("direct code detail page missing the direct-code explanation:\n%s", directBody)
+	}
+	if strings.Contains(directBody, "<svg") {
+		t.Fatalf("direct code detail page must not render an analytics chart:\n%s", directBody)
+	}
+	// Download and delete stay available.
+	if !strings.Contains(directBody, "Download image") {
+		t.Fatalf("direct code detail page missing download link:\n%s", directBody)
+	}
+	if !strings.Contains(directBody, "Delete this code") {
+		t.Fatalf("direct code detail page missing delete control:\n%s", directBody)
+	}
+	_ = directPath
+
+	// Create a dynamic code via the form (mode omitted, dynamic is the default).
+	resp = doRequest(t, client, http.MethodPost, srv.URL+"/ui/codes", url.Values{
+		"destination": {"https://example.com/dynamic-target"},
+		"mode":        {"dynamic"},
+		"format":      {"png"},
+	}, true, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("create dynamic code: status %d, body: %s", resp.StatusCode, readBody(t, resp))
+	}
+	dynamicBody := readBody(t, resp)
+
+	if !strings.Contains(dynamicBody, "mode-dynamic") {
+		t.Fatalf("dynamic code detail page missing Dynamic badge:\n%s", dynamicBody)
+	}
+	if !strings.Contains(dynamicBody, `id="destination"`) {
+		t.Fatalf("dynamic code detail page must show the destination edit form:\n%s", dynamicBody)
+	}
+	if !strings.Contains(dynamicBody, "<svg") {
+		t.Fatalf("dynamic code detail page must render an inline SVG analytics chart:\n%s", dynamicBody)
+	}
+
+	// An unknown mode value is rejected with a validation message.
+	resp = doRequest(t, client, http.MethodPost, srv.URL+"/ui/codes", url.Values{
+		"destination": {"https://example.com/bogus-mode"},
+		"mode":        {"bogus"},
+		"format":      {"png"},
+	}, true, nil)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 for unknown mode, got %d", resp.StatusCode)
+	}
+	_ = resp.Body.Close()
 }
 
 func readBody(t *testing.T, resp *http.Response) string {

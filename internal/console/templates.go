@@ -35,6 +35,7 @@ func newUserView(u domain.User) *UserView {
 
 var templateFuncs = template.FuncMap{
 	"trendChart": renderTrendChart,
+	"codeMode":   codeMode,
 }
 
 // templateSet parses layout.html once and clones it per page, so each page's

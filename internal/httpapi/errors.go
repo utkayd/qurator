@@ -29,6 +29,8 @@ const (
 	CodeForbidden                  ErrorCode = "forbidden"
 	CodeTokenRevoked               ErrorCode = "token_revoked"
 	CodeConflict                   ErrorCode = "conflict"
+	CodeDirectCodeImmutable        ErrorCode = "direct_code_immutable" // spec 002
+	CodeNotTracked                 ErrorCode = "not_tracked"           // spec 002
 	CodeRateLimited                ErrorCode = "rate_limited"
 	CodeInternal                   ErrorCode = "internal"
 	CodeNotImplemented             ErrorCode = "not_implemented" // foundation stubs only
@@ -39,7 +41,7 @@ func (c ErrorCode) Status() int {
 	switch c {
 	case CodeContentTooLarge:
 		return http.StatusRequestEntityTooLarge
-	case CodeAliasReserved, CodeAliasTaken, CodeConflict:
+	case CodeAliasReserved, CodeAliasTaken, CodeConflict, CodeDirectCodeImmutable:
 		return http.StatusConflict
 	case CodeNotFound:
 		return http.StatusNotFound

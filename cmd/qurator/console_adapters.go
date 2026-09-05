@@ -41,6 +41,7 @@ func (c consoleCodes) Create(ctx context.Context, userID string, in console.Crea
 		UserID:      userID,
 		Destination: in.Destination,
 		Alias:       in.Alias,
+		Mode:        domain.CodeMode(in.Mode), // empty → dynamic; the service validates the value
 		Styling: domain.Styling{
 			FgColor:       in.Styling.FgColor,
 			BgColor:       in.Styling.BgColor,
@@ -108,6 +109,10 @@ func translateCodesErr(err error) error {
 		return fmt.Errorf("%w: the destination is not a valid URL", console.ErrValidation)
 	case errors.Is(err, codes.ErrInvalidStyling):
 		return fmt.Errorf("%w: the styling is not valid", console.ErrValidation)
+	case errors.Is(err, codes.ErrInvalidMode):
+		return fmt.Errorf("%w: mode must be dynamic or direct", console.ErrValidation)
+	case errors.Is(err, codes.ErrDirectImmutable):
+		return fmt.Errorf("%w: this is a direct code; its destination is printed into the image and cannot be changed", console.ErrValidation)
 	}
 	return err
 }

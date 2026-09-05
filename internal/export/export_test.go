@@ -287,3 +287,153 @@ func TestWrite_AllocationsDoNotBlowUpWithRowCount(t *testing.T) {
 		t.Fatalf("allocations per row grew from %v to %v across a 100x row-count increase; Write likely buffers the whole table", perRowSmall, perRowLarge)
 	}
 }
+
+// TestWriteRead_ModeRoundTrips pins spec 002: a direct code is exported and re-imported
+// as direct; a row with no mode in the archive (pre-002 export) imports as dynamic.
+func TestWriteRead_ModeRoundTrips(t *testing.T) {
+	ctx := context.Background()
+	src := storetest.NewMemStore()
+	u := seedUser(t, src, "admin@example.com", true)
+	dyn := seedCode(t, src, u.ID, "dyn", "https://example.com/dyn")
+	direct := &domain.Code{
+		ID: "direct-id", ShortCode: "direct", UserID: u.ID, Destination: "https://example.com/direct", Mode: domain.ModeDirect,
+		Styling: domain.Styling{FgColor: "#000000", BgColor: "#ffffff", ModuleShape: domain.ShapeSquare, SizePx: 512, ECLevel: domain.ECMedium, ECLevelEffective: domain.ECMedium},
+	}
+	if err := src.CreateCode(ctx, direct); err != nil {
+		t.Fatalf("CreateCode(direct): %v", err)
+	}
+
+	var buf bytes.Buffer
+	if err := export.Write(ctx, src, &buf); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	// codes.jsonl carries mode for every row (FR-106, export included).
+	rows := readJSONL(t, buf.Bytes(), "codes.jsonl")
+	modes := map[string]string{}
+	for _, row := range rows {
+		var rec struct {
+			ID   string `json:"ID"`
+			Mode string `json:"Mode"`
+		}
+		if err := json.Unmarshal(row, &rec); err != nil {
+			t.Fatal(err)
+		}
+		modes[rec.ID] = rec.Mode
+	}
+	if modes[dyn.ID] != "dynamic" || modes[direct.ID] != "direct" {
+		t.Fatalf("exported modes: %v", modes)
+	}
+
+	dst := storetest.NewMemStore()
+	if err := export.Read(ctx, dst, bytes.NewReader(buf.Bytes()), false); err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	for id, want := range map[string]domain.CodeMode{dyn.ID: domain.ModeDynamic, direct.ID: domain.ModeDirect} {
+		got, err := dst.GetCodeByID(ctx, id, u.ID)
+		if err != nil {
+			t.Fatalf("GetCodeByID(%s): %v", id, err)
+		}
+		if got.Mode != want {
+			t.Fatalf("imported %s mode = %q, want %q", id, got.Mode, want)
+		}
+	}
+
+	// A pre-002 archive: strip Mode from every code row and import again.
+	legacy := rewriteJSONL(t, buf.Bytes(), "codes.jsonl", func(row []byte) []byte {
+		var m map[string]any
+		if err := json.Unmarshal(row, &m); err != nil {
+			t.Fatal(err)
+		}
+		delete(m, "Mode")
+		out, _ := json.Marshal(m)
+		return out
+	})
+	dst2 := storetest.NewMemStore()
+	if err := export.Read(ctx, dst2, bytes.NewReader(legacy), false); err != nil {
+		t.Fatalf("Read(legacy): %v", err)
+	}
+	for _, id := range []string{dyn.ID, direct.ID} {
+		got, err := dst2.GetCodeByID(ctx, id, u.ID)
+		if err != nil {
+			t.Fatalf("GetCodeByID(%s): %v", id, err)
+		}
+		if got.Mode != domain.ModeDynamic {
+			t.Fatalf("legacy row %s imported as %q, want dynamic", id, got.Mode)
+		}
+	}
+}
+
+// readJSONL returns the non-empty lines of one entry in a tar archive.
+func readJSONL(t *testing.T, archive []byte, name string) [][]byte {
+	t.Helper()
+	tr := tar.NewReader(bytes.NewReader(archive))
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if hdr.Name != name {
+			continue
+		}
+		body, err := io.ReadAll(tr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var rows [][]byte
+		for _, line := range bytes.Split(body, []byte("\n")) {
+			if len(bytes.TrimSpace(line)) > 0 {
+				rows = append(rows, line)
+			}
+		}
+		return rows
+	}
+	t.Fatalf("archive has no %s", name)
+	return nil
+}
+
+// rewriteJSONL copies a tar archive, transforming each line of one entry with fn.
+func rewriteJSONL(t *testing.T, archive []byte, name string, fn func([]byte) []byte) []byte {
+	t.Helper()
+	tr := tar.NewReader(bytes.NewReader(archive))
+	var out bytes.Buffer
+	tw := tar.NewWriter(&out)
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, err := io.ReadAll(tr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if hdr.Name == name {
+			var b bytes.Buffer
+			for _, line := range bytes.Split(body, []byte("\n")) {
+				if len(bytes.TrimSpace(line)) == 0 {
+					continue
+				}
+				b.Write(fn(line))
+				b.WriteByte('\n')
+			}
+			body = b.Bytes()
+		}
+		h := *hdr
+		h.Size = int64(len(body))
+		if err := tw.WriteHeader(&h); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tw.Write(body); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return out.Bytes()
+}

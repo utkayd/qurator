@@ -27,10 +27,11 @@ type StylingInput struct {
 	ECLevel       domain.ECLevel
 }
 
-// CreateCodeInput is what the console form collects to create a dynamic code.
+// CreateCodeInput is what the console form collects to create a code.
 type CreateCodeInput struct {
 	Destination string
 	Alias       string // empty = system-generated short code
+	Mode        string // "dynamic" or "direct"; see modeDynamic/modeDirect
 	Styling     StylingInput
 }
 
@@ -87,6 +88,22 @@ type Deps struct {
 	Tokens    TokensService
 	Analytics AnalyticsService
 	Auth      Authenticator
+}
+
+// Code modes, mirroring domain.ModeDynamic/domain.ModeDirect as plain strings so this
+// package can be built and tested before the domain package grows a Mode field
+// (specs/002-direct-codes). Once domain.Code.Mode exists, codeMode below is the sole
+// place that bridges the two.
+const (
+	modeDynamic = "dynamic"
+	modeDirect  = "direct"
+)
+
+// codeMode returns the console-facing mode string for a domain.Code. This is the one
+// place that reads domain.Code.Mode, so it is also the one line to update once the
+// backend stream lands that field.
+func codeMode(c domain.Code) string {
+	return string(c.Mode)
 }
 
 // Sentinel errors a CodesService/TokensService/AnalyticsService/Authenticator

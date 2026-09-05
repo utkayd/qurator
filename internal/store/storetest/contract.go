@@ -19,7 +19,8 @@ import (
 // store on every call; the suite never shares state between subtests.
 //
 // The first twelve numbered requirements come from contracts/store.md §Store; Req13 pins
-// the bulk-iteration walkers export depends on (FR-055). The remaining
+// the bulk-iteration walkers export depends on (FR-055); Req14 pins the code mode
+// column (spec 002, FR-101/FR-108). The remaining
 // subtests pin behaviours of the frozen interface that the numbered list leaves implicit
 // (users, tokens, alias availability, listing filters).
 func RunStoreContract(t *testing.T, newStore func(t *testing.T) store.Store) {
@@ -749,6 +750,73 @@ func RunStoreContract(t *testing.T, newStore func(t *testing.T) store.Store) {
 		calls = 0
 		if err := s.ForEachReservation(ctx(t), func(domain.AliasReservation) error { calls++; return sentinel }); !errors.Is(err, sentinel) || calls != 1 {
 			t.Fatalf("ForEachReservation with failing fn: err=%v calls=%d, want sentinel after 1 call", err, calls)
+		}
+	})
+
+	t.Run("Req14_ModePersistsAndDefaultsDynamic", func(t *testing.T) {
+		s := newStore(t)
+		u := mustUser(t, s, "a@example.com")
+
+		// Mode unset on input reads back as dynamic — the v1 behaviour, made explicit.
+		unset := mustCode(t, s, u.ID, "mode-unset", true)
+		if unset.Mode != domain.ModeDynamic {
+			t.Fatalf("Mode unset on CreateCode: read back %q, want %q", unset.Mode, domain.ModeDynamic)
+		}
+		dyn := newCode(u.ID, "mode-dynamic", true)
+		dyn.Mode = domain.ModeDynamic
+		if err := s.CreateCode(ctx(t), dyn); err != nil {
+			t.Fatalf("CreateCode(dynamic): %v", err)
+		}
+		dir := newCode(u.ID, "mode-direct", true)
+		dir.Mode = domain.ModeDirect
+		if err := s.CreateCode(ctx(t), dir); err != nil {
+			t.Fatalf("CreateCode(direct): %v", err)
+		}
+		if dir.Mode != domain.ModeDirect {
+			t.Fatalf("CreateCode(direct) reflected Mode %q back to the caller", dir.Mode)
+		}
+		want := map[string]domain.CodeMode{unset.ID: domain.ModeDynamic, dyn.ID: domain.ModeDynamic, dir.ID: domain.ModeDirect}
+		for id, mode := range want {
+			got, err := s.GetCodeByID(ctx(t), id, u.ID)
+			if err != nil {
+				t.Fatalf("GetCodeByID(%s): %v", id, err)
+			}
+			if got.Mode != mode {
+				t.Fatalf("GetCodeByID(%s).Mode = %q, want %q", id, got.Mode, mode)
+			}
+		}
+		if got, err := s.GetCodeByShortCode(ctx(t), "MODE-DIRECT"); err != nil || got.Mode != domain.ModeDirect {
+			t.Fatalf("GetCodeByShortCode(direct): mode=%q err=%v", got.Mode, err)
+		}
+		items, _, err := s.ListCodes(ctx(t), domain.CodeFilter{UserID: u.ID, Limit: 10})
+		if err != nil || len(items) != 3 {
+			t.Fatalf("ListCodes: %d items err=%v", len(items), err)
+		}
+		for _, it := range items {
+			if it.Mode != want[it.ID] {
+				t.Fatalf("ListCodes(%s).Mode = %q, want %q", it.ShortCode, it.Mode, want[it.ID])
+			}
+		}
+		// Export walks through ForEachCode, so it must report mode too (FR-106).
+		seen := map[string]domain.CodeMode{}
+		if err := s.ForEachCode(ctx(t), func(c *domain.Code) error { seen[c.ID] = c.Mode; return nil }); err != nil {
+			t.Fatalf("ForEachCode: %v", err)
+		}
+		for id, mode := range want {
+			if seen[id] != mode {
+				t.Fatalf("ForEachCode(%s).Mode = %q, want %q", id, seen[id], mode)
+			}
+		}
+		// The store itself does not police direct immutability (the service does), but
+		// mode must survive every other mutation unchanged.
+		if err := s.UpdateDestination(ctx(t), dir.ID, u.ID, "https://example.com/moved", dir.Version); err != nil {
+			t.Fatalf("UpdateDestination: %v", err)
+		}
+		if err := s.DeleteCode(ctx(t), dir.ID, u.ID); err != nil {
+			t.Fatalf("DeleteCode: %v", err)
+		}
+		if got, _ := s.GetCodeByID(ctx(t), dir.ID, u.ID); got.Mode != domain.ModeDirect {
+			t.Fatalf("Mode changed across mutations: %q", got.Mode)
 		}
 	})
 

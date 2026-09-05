@@ -48,12 +48,27 @@ const (
 	CodeDeleted  CodeState = "deleted"
 )
 
-// Code is a persisted dynamic QR code whose destination may change after printing.
+// CodeMode says what the rendered image encodes (spec 002). It is fixed at creation:
+// the printed symbol cannot change, so neither can the mode.
+type CodeMode string
+
+const (
+	// ModeDynamic encodes the instance's scan address; the destination may change and
+	// scans are counted. This is the v1 behaviour and the default.
+	ModeDynamic CodeMode = "dynamic"
+	// ModeDirect encodes the destination itself. The destination and state are
+	// immutable, and scans never pass through the instance, so none are tracked.
+	ModeDirect CodeMode = "direct"
+)
+
+// Code is a persisted QR code. A dynamic code's destination may change after printing;
+// a direct code's is printed into the image (see CodeMode).
 type Code struct {
 	ID          string
 	ShortCode   string // generated or alias; immutable; unique case-insensitively
 	IsAlias     bool
 	UserID      string
+	Mode        CodeMode // immutable; empty on input means ModeDynamic
 	Destination string
 	State       CodeState
 	Styling     Styling

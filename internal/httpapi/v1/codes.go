@@ -82,6 +82,7 @@ type stylingRequest struct {
 }
 
 type createCodeRequest struct {
+	Mode        string          `json:"mode"`
 	Destination string          `json:"destination"`
 	Alias       string          `json:"alias"`
 	Styling     *stylingRequest `json:"styling"`
@@ -102,8 +103,12 @@ type stylingProfile struct {
 	HasLogo          bool   `json:"has_logo"`
 }
 
+// codeResponse is the Code schema. scan_url is present for dynamic codes only: a direct
+// code's printed image encodes the destination, so offering a scan address would
+// misdescribe what scanning it does (FR-106). The key is omitted, not nulled.
 type codeResponse struct {
 	ID          string         `json:"id"`
+	Mode        string         `json:"mode"`
 	ShortCode   string         `json:"short_code"`
 	Version     int64          `json:"version"`
 	IsAlias     bool           `json:"is_alias"`
@@ -111,7 +116,7 @@ type codeResponse struct {
 	State       string         `json:"state"`
 	Styling     stylingProfile `json:"styling"`
 	ImageURL    string         `json:"image_url"`
-	ScanURL     string         `json:"scan_url"`
+	ScanURL     string         `json:"scan_url,omitempty"`
 	CreatedAt   time.Time      `json:"created_at"`
 	UpdatedAt   time.Time      `json:"updated_at"`
 }
@@ -122,8 +127,17 @@ type codePage struct {
 }
 
 func (h *CodesHandler) toResponse(c *domain.Code) codeResponse {
+	mode := c.Mode
+	if mode == "" {
+		mode = domain.ModeDynamic
+	}
+	scanURL := ""
+	if mode != domain.ModeDirect {
+		scanURL = h.svc.ScanURL(c.ShortCode)
+	}
 	return codeResponse{
 		ID:          c.ID,
+		Mode:        string(mode),
 		ShortCode:   c.ShortCode,
 		Version:     c.Version,
 		IsAlias:     c.IsAlias,
@@ -140,7 +154,7 @@ func (h *CodesHandler) toResponse(c *domain.Code) codeResponse {
 			HasLogo:          c.Styling.LogoBlobKey != "",
 		},
 		ImageURL:  h.svc.ImageURL(c.ID),
-		ScanURL:   h.svc.ScanURL(c.ShortCode),
+		ScanURL:   scanURL,
 		CreatedAt: c.CreatedAt.UTC(),
 		UpdatedAt: c.UpdatedAt.UTC(),
 	}
@@ -235,6 +249,11 @@ func writeServiceError(w http.ResponseWriter, r *http.Request, err error) {
 	case errors.As(err, &ce):
 		httpapi.WriteError(w, httpapi.CodeConflict, "The code was modified by another request; re-read it and retry with its current version.",
 			map[string]any{"expected": ce.Expected, "actual": ce.Actual})
+	case errors.Is(err, codes.ErrDirectImmutable):
+		httpapi.WriteError(w, httpapi.CodeDirectCodeImmutable,
+			"This is a direct code: its destination is encoded in the printed image and cannot be changed, disabled, or enabled. Create a new code instead.", details)
+	case errors.Is(err, codes.ErrInvalidMode):
+		httpapi.WriteError(w, httpapi.CodeInvalidRequest, "mode must be one of dynamic, direct.", details)
 	case errors.Is(err, codes.ErrUnsupportedScheme):
 		httpapi.WriteError(w, httpapi.CodeUnsupportedScheme, "The destination uses a scheme this instance does not permit.", details)
 	case errors.Is(err, codes.ErrSelfReferential):
@@ -267,6 +286,12 @@ func (h *CodesHandler) create(w http.ResponseWriter, r *http.Request, userID str
 		httpapi.WriteError(w, httpapi.CodeInvalidRequest, "A destination is required.", map[string]any{"field": "destination"})
 		return
 	}
+	switch domain.CodeMode(req.Mode) {
+	case "", domain.ModeDynamic, domain.ModeDirect:
+	default:
+		httpapi.WriteError(w, httpapi.CodeInvalidRequest, "mode must be one of dynamic, direct.", map[string]any{"field": "mode"})
+		return
+	}
 	styling, logo, autoRaise, field, ok := stylingFromRequest(req.Styling)
 	if !ok {
 		httpapi.WriteError(w, httpapi.CodeInvalidRequest, "A styling parameter is out of range or unsupported.", map[string]any{"field": field})
@@ -274,6 +299,7 @@ func (h *CodesHandler) create(w http.ResponseWriter, r *http.Request, userID str
 	}
 	c, err := h.svc.Create(r.Context(), codes.CreateInput{
 		UserID:        userID,
+		Mode:          domain.CodeMode(req.Mode),
 		Destination:   req.Destination,
 		Alias:         req.Alias,
 		Styling:       styling,

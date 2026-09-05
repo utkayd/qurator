@@ -119,6 +119,14 @@ func (h *AnalyticsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		httpapi.Internal(w, r, err)
 		return
 	}
+	// A direct code's scans go straight to the destination and are never observed;
+	// say so rather than return a zero that looks like "nobody scanned it" (FR-105).
+	if code.Mode == domain.ModeDirect {
+		httpapi.WriteError(w, httpapi.CodeNotTracked,
+			"Scans of a direct code are not tracked: the printed image sends scanners straight to the destination without passing through this instance.",
+			map[string]any{"mode": string(code.Mode)})
+		return
+	}
 
 	res, err := h.store.QueryAnalytics(ctx, domain.AnalyticsQuery{CodeID: code.ID, From: from, To: to, Bucket: bucket})
 	if err != nil {
