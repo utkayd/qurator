@@ -149,6 +149,7 @@ func (h *Handler) baseLayout(r *http.Request, title string) Layout {
 
 func (h *Handler) render(w http.ResponseWriter, r *http.Request, status int, page, title string, content any) {
 	l := h.baseLayout(r, title)
+	l.Section = sectionForPage(page)
 	l.Content = content
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")

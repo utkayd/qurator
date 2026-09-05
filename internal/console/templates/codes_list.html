@@ -1,34 +1,54 @@
 {{define "content"}}
-<h1>Your codes</h1>
-<p><a href="/ui/codes/new">Create a new code</a></p>
+<div class="page-header">
+  <div>
+    <h1>Your codes</h1>
+    <p class="page-subtitle">Dynamic QR codes you own</p>
+  </div>
+  <a class="btn btn-primary" href="/ui/codes/new">
+    <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"/></svg>
+    Create a new code
+  </a>
+</div>
+
 {{if not .Items}}
-<p class="help">No codes yet.</p>
+<div class="card empty-state">
+  <div class="empty-icon" aria-hidden="true">
+    <svg class="icon" viewBox="0 0 24 24"><path d="M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h2v2h-2zM18 14h2v2h-2zM14 18h2v2h-2zM18 18h2v2h-2z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>
+  </div>
+  <h2>No codes yet</h2>
+  <p class="help">Create a dynamic code to get a QR image whose destination you can change any time.</p>
+  <a class="btn btn-primary" href="/ui/codes/new">Create your first code</a>
+</div>
 {{else}}
-<table>
-  <caption class="help">Dynamic QR codes you own</caption>
-  <thead>
-    <tr>
-      <th scope="col">Short code</th>
-      <th scope="col">Destination</th>
-      <th scope="col">Mode</th>
-      <th scope="col">State</th>
-      <th scope="col">Created</th>
-    </tr>
-  </thead>
-  <tbody>
-    {{range .Items}}
-    <tr>
-      <td><a href="/ui/codes/{{.ID}}">{{.ShortCode}}</a></td>
-      <td>{{.Destination}}</td>
-      <td><span class="badge mode-{{codeMode .}}">{{if eq (codeMode .) "direct"}}Direct{{else}}Dynamic{{end}}</span></td>
-      <td><span class="badge {{.State}}">{{.State}}</span></td>
-      <td>{{.CreatedAt.Format "2006-01-02"}}</td>
-    </tr>
-    {{end}}
-  </tbody>
-</table>
+<div class="card table-card">
+  <table class="table">
+    <caption class="sr-only">Dynamic QR codes you own</caption>
+    <thead>
+      <tr>
+        <th scope="col">Short code</th>
+        <th scope="col">Destination</th>
+        <th scope="col">Mode</th>
+        <th scope="col">State</th>
+        <th scope="col">Created</th>
+      </tr>
+    </thead>
+    <tbody>
+      {{range .Items}}
+      <tr class="row-link">
+        <td><a class="mono row-anchor" href="/ui/codes/{{.ID}}">{{.ShortCode}}</a></td>
+        <td class="cell-truncate"><span title="{{.Destination}}">{{.Destination}}</span></td>
+        <td><span class="pill mode-{{codeMode .}}">{{if eq (codeMode .) "direct"}}Direct{{else}}Dynamic{{end}}</span></td>
+        <td><span class="pill state-{{.State}}"><span class="dot" aria-hidden="true"></span>{{.State}}</span></td>
+        <td class="cell-muted"><time datetime="{{.CreatedAt.Format "2006-01-02T15:04:05Z07:00"}}" title="{{.CreatedAt.Format "2006-01-02 15:04"}}">{{relTime .CreatedAt}}</time></td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+</div>
 {{end}}
 {{if .NextCursor}}
-<p><a href="/ui/?cursor={{.NextCursor}}">Next page</a></p>
+<div class="pager">
+  <a class="btn" href="/ui/?cursor={{.NextCursor}}">Next page</a>
+</div>
 {{end}}
 {{end}}

@@ -1,56 +1,70 @@
 {{define "content"}}
-<h1>API tokens</h1>
-{{if .Error}}<p class="error-banner" role="alert">{{.Error}}</p>{{end}}
-
-<div class="card">
-  <h2>Create a token</h2>
-  <form class="stack" hx-post="/ui/tokens" hx-target="body" hx-swap="outerHTML">
-    <div class="field">
-      <label for="name">Name</label>
-      <input type="text" id="name" name="name" required maxlength="128" placeholder="ci-pipeline">
-    </div>
-    <div class="field">
-      <label for="expires_at">Expires (optional)</label>
-      <input type="datetime-local" id="expires_at" name="expires_at">
-    </div>
-    <button type="submit" class="primary">Create token</button>
-  </form>
+<div class="page-header">
+  <div>
+    <h1>API tokens</h1>
+    <p class="page-subtitle">Bearer tokens for the HTTP API. Secrets are shown once, at creation.</p>
+  </div>
 </div>
+{{if .Error}}<p class="banner banner-danger" role="alert">{{.Error}}</p>{{end}}
 
-{{if .Items}}
-<table>
-  <caption class="help">Your tokens. Secrets are never shown again after creation.</caption>
-  <thead>
-    <tr>
-      <th scope="col">Name</th>
-      <th scope="col">Created</th>
-      <th scope="col">Last used</th>
-      <th scope="col">Status</th>
-      <th scope="col"></th>
-    </tr>
-  </thead>
-  <tbody>
-    {{range .Items}}
-    <tr>
-      <td>{{.Name}}</td>
-      <td>{{.CreatedAt.Format "2006-01-02"}}</td>
-      <td>{{if .LastUsedAt}}{{.LastUsedAt.Format "2006-01-02"}}{{else}}never{{end}}</td>
-      <td>{{if .RevokedAt}}revoked{{else}}active{{end}}</td>
-      <td>
-        {{if not .RevokedAt}}
-        <form hx-delete="/ui/tokens/{{.ID}}" hx-target="body" hx-swap="outerHTML">
-          <button type="submit" class="danger"
-                  data-confirm-message="Revoking this token takes effect immediately; anything using it will stop authenticating.">
-            Revoke
-          </button>
-        </form>
+<div class="tokens-layout">
+  <section class="card">
+    <h2 class="card-title">Create a token</h2>
+    <form class="stack" hx-post="/ui/tokens" hx-target="body" hx-swap="outerHTML">
+      <div class="field">
+        <label for="name">Name</label>
+        <input type="text" id="name" name="name" required maxlength="128" placeholder="ci-pipeline">
+      </div>
+      <div class="field">
+        <label for="expires_at">Expires <span class="optional">optional</span></label>
+        <input type="datetime-local" id="expires_at" name="expires_at">
+      </div>
+      <div class="form-actions">
+        <button type="submit" class="btn btn-primary">Create token</button>
+      </div>
+    </form>
+  </section>
+
+  {{if .Items}}
+  <div class="card table-card">
+    <table class="table">
+      <caption class="sr-only">Your tokens. Secrets are never shown again after creation.</caption>
+      <thead>
+        <tr>
+          <th scope="col">Name</th>
+          <th scope="col">Created</th>
+          <th scope="col">Last used</th>
+          <th scope="col">Status</th>
+          <th scope="col"><span class="sr-only">Actions</span></th>
+        </tr>
+      </thead>
+      <tbody>
+        {{range .Items}}
+        <tr>
+          <td class="cell-strong">{{.Name}}</td>
+          <td class="cell-muted"><time datetime="{{.CreatedAt.Format "2006-01-02T15:04:05Z07:00"}}" title="{{.CreatedAt.Format "2006-01-02 15:04"}}">{{relTime .CreatedAt}}</time></td>
+          <td class="cell-muted">{{if .LastUsedAt}}<time datetime="{{.LastUsedAt.Format "2006-01-02T15:04:05Z07:00"}}" title="{{.LastUsedAt.Format "2006-01-02 15:04"}}">{{relTime .LastUsedAt}}</time>{{else}}never{{end}}</td>
+          <td>{{if .RevokedAt}}<span class="pill state-disabled"><span class="dot" aria-hidden="true"></span>revoked</span>{{else}}<span class="pill state-active"><span class="dot" aria-hidden="true"></span>active</span>{{end}}</td>
+          <td class="cell-actions">
+            {{if not .RevokedAt}}
+            <form hx-delete="/ui/tokens/{{.ID}}" hx-target="body" hx-swap="outerHTML">
+              <button type="submit" class="btn btn-sm btn-danger-ghost"
+                      data-confirm-message="Revoking this token takes effect immediately; anything using it will stop authenticating.">
+                Revoke
+              </button>
+            </form>
+            {{end}}
+          </td>
+        </tr>
         {{end}}
-      </td>
-    </tr>
-    {{end}}
-  </tbody>
-</table>
-{{else}}
-<p class="help">No tokens yet.</p>
-{{end}}
+      </tbody>
+    </table>
+  </div>
+  {{else}}
+  <div class="card empty-state">
+    <h2>No tokens yet</h2>
+    <p class="help">Create a token to call the API from scripts and CI.</p>
+  </div>
+  {{end}}
+</div>
 {{end}}

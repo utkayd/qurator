@@ -1,15 +1,28 @@
 {{define "content"}}
-<h1>Token created</h1>
-<p class="error-banner" role="alert">
-  Copy this secret now. It will never be shown again — not on this page after a reload,
-  not from the token list, not from any export.
-</p>
-
-<div class="card" data-secret-container>
-  <p><strong>{{.Name}}</strong></p>
-  <p class="secret-box" data-secret-value>{{.Secret}}</p>
-  <button type="button" data-copy-secret>Copy to clipboard</button>
+<div class="page-header">
+  <div>
+    <p class="breadcrumb"><a href="/ui/tokens">Tokens</a> <span aria-hidden="true">/</span> New</p>
+    <h1>Token created</h1>
+  </div>
 </div>
 
-<p><a href="/ui/tokens">Back to tokens</a></p>
+<div class="narrow">
+  <p class="banner banner-warning" role="alert">
+    <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 5.5v3M8 11h.01M7.1 2.6 1.6 12.2A1 1 0 0 0 2.5 13.7h11a1 1 0 0 0 .9-1.5L8.9 2.6a1 1 0 0 0-1.8 0Z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    <span>Copy this secret now. It will never be shown again — not on this page after a reload,
+    not from the token list, not from any export.</span>
+  </p>
+
+  <div class="card secret-panel" data-secret-container>
+    <p class="secret-name"><strong>{{.Name}}</strong></p>
+    <p class="secret-box" data-secret-value>{{.Secret}}</p>
+    <button type="button" class="btn btn-primary" data-copy-secret>
+      <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M10.5 5.5v-2a1 1 0 0 0-1-1h-6a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>
+      Copy to clipboard
+    </button>
+    <p class="help">Copying hides the secret from this page.</p>
+  </div>
+
+  <p><a class="btn btn-ghost" href="/ui/tokens">Back to tokens</a></p>
+</div>
 {{end}}

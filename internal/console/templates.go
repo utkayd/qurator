@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"html/template"
 	"io"
+	"strings"
+	"time"
 
 	"github.com/utkayd/qurator/internal/domain"
 	"github.com/utkayd/qurator/internal/httpapi/middleware"
@@ -18,6 +20,7 @@ type Layout struct {
 	AppJSURL   string
 	HtmxURL    string
 	CSRFHeader string
+	Section    string // "codes" or "tokens": which primary nav entry is current
 	User       *UserView
 	Content    any // the page-specific data, exposed to the "content" block
 }
@@ -26,16 +29,65 @@ type Layout struct {
 // exposes nothing sensitive.
 type UserView struct {
 	Email   string
+	Initial string // first letter of the email, for the header avatar chip
 	IsAdmin bool
 }
 
 func newUserView(u domain.User) *UserView {
-	return &UserView{Email: u.Email, IsAdmin: u.IsAdmin}
+	initial := "?"
+	if u.Email != "" {
+		initial = strings.ToUpper(u.Email[:1])
+	}
+	return &UserView{Email: u.Email, Initial: initial, IsAdmin: u.IsAdmin}
 }
 
 var templateFuncs = template.FuncMap{
 	"trendChart": renderTrendChart,
 	"codeMode":   codeMode,
+	"relTime":    relTime,
+}
+
+// relTime renders t as a short, human relative time ("3h ago", "12d ago"); older than
+// about two months it falls back to the calendar date. Templates pair it with a
+// <time datetime> so the exact instant is still available on hover and to tooling. It
+// accepts both time.Time and *time.Time (domain.APIToken.LastUsedAt is a pointer).
+func relTime(v any) string {
+	var t time.Time
+	switch x := v.(type) {
+	case time.Time:
+		t = x
+	case *time.Time:
+		if x == nil {
+			return "never"
+		}
+		t = *x
+	default:
+		return ""
+	}
+	d := time.Since(t)
+	switch {
+	case d < time.Minute:
+		return "just now"
+	case d < time.Hour:
+		return fmt.Sprintf("%dm ago", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh ago", int(d.Hours()))
+	case d < 60*24*time.Hour:
+		return fmt.Sprintf("%dd ago", int(d.Hours()/24))
+	default:
+		return t.Format("2 Jan 2006")
+	}
+}
+
+// sectionForPage maps a page template to the primary nav entry it belongs under.
+func sectionForPage(page string) string {
+	switch {
+	case strings.HasPrefix(page, "token"):
+		return "tokens"
+	case strings.HasPrefix(page, "code"):
+		return "codes"
+	}
+	return ""
 }
 
 // templateSet parses layout.html once and clones it per page, so each page's
