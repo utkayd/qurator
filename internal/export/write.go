@@ -18,7 +18,7 @@ import (
 const (
 	fileManifest     = "manifest.json"
 	fileUsers        = "users.jsonl"
-	fileTokens       = "api_tokens.jsonl"
+	fileTokens       = "api_tokens.jsonl" //nolint:gosec // archive entry filename, not a credential
 	fileCodes        = "codes.jsonl"
 	fileReservations = "alias_reservations.jsonl"
 	fileRollups      = "scan_rollups.jsonl"
@@ -54,7 +54,7 @@ func (s *spooledEntity) put(v any) error {
 
 func (s *spooledEntity) close() error {
 	err := s.f.Close()
-	os.Remove(s.f.Name())
+	_ = os.Remove(s.f.Name())
 	return err
 }
 
@@ -69,7 +69,7 @@ func Write(ctx context.Context, st store.Store, w io.Writer) error {
 	var spools []*spooledEntity
 	defer func() {
 		for _, s := range spools {
-			s.close()
+			_ = s.close()
 		}
 	}()
 

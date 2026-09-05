@@ -22,7 +22,7 @@ func TestGenerateShapeAndAlphabet(t *testing.T) {
 	}
 	const allowed = "0123456789abcdefghjkmnpqrstvwxyz"
 	for _, c := range code {
-		if strings.IndexRune(allowed, c) == -1 {
+		if !strings.ContainsRune(allowed, c) {
 			t.Fatalf("Generate() = %q contains character %q outside the Crockford alphabet", code, c)
 		}
 	}

@@ -1110,7 +1110,7 @@ func newID(prefix string) string {
 
 func mustUser(t *testing.T, s store.Store, email string) *domain.User {
 	t.Helper()
-	u := &domain.User{
+	u := &domain.User{ //nolint:gosec // fixed fake PHC test fixture below, not a real credential
 		ID:           newID("usr"),
 		Email:        email,
 		PasswordHash: "$argon2id$v=19$m=65536,t=3,p=4$c2FsdA$aGFzaA",

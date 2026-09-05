@@ -202,7 +202,7 @@ func pvListSQLite(t *testing.T, db *sql.DB) []pvTable {
 	if err != nil {
 		t.Fatalf("sqlite_master: %v", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []pvTable
 	for rows.Next() {
 		var name string
@@ -227,7 +227,7 @@ func pvListSQLite(t *testing.T, db *sql.DB) []pvTable {
 			}
 			out[i].columns = append(out[i].columns, name)
 		}
-		crows.Close()
+		_ = crows.Close()
 	}
 	return out
 }
@@ -239,7 +239,7 @@ func pvListPostgres(t *testing.T, db *sql.DB) []pvTable {
 	if err != nil {
 		t.Fatalf("information_schema.columns: %v", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []pvTable
 	for rows.Next() {
 		var tbl, col string
@@ -326,7 +326,7 @@ func pvAssertDatabaseClean(t *testing.T, db *sql.DB, tables []pvTable, quote fun
 		if err := rows.Err(); err != nil {
 			t.Fatalf("iterate %s: %v", tbl.name, err)
 		}
-		rows.Close()
+		_ = rows.Close()
 	}
 	if textValues == 0 {
 		t.Fatal("no text values inspected; the dump would be vacuous")
@@ -381,7 +381,7 @@ func TestPrivacy_NoAddressPersisted_SQLite(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open raw sqlite: %v", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	tables := pvListSQLite(t, db)
 	pvAssertDatabaseClean(t, db, tables, func(s string) string { return fmt.Sprintf("%q", s) })
 }
@@ -397,7 +397,7 @@ func TestPrivacy_NoAddressPersisted_Postgres(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open raw postgres: %v", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	tables := pvListPostgres(t, db)
 	pvAssertDatabaseClean(t, db, tables, func(s string) string { return `"` + strings.ReplaceAll(s, `"`, `""`) + `"` })
 }

@@ -359,7 +359,7 @@ func TestConsoleLifecycle(t *testing.T) {
 	if resp.Request.URL.Path != "/ui/signin" {
 		t.Fatalf("anonymous / did not land on sign-in, got %s", resp.Request.URL.Path)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	// 2. Sign in via the plain HTML form.
 	resp = doRequest(t, client, http.MethodPost, srv.URL+"/ui/signin", url.Values{
@@ -369,7 +369,7 @@ func TestConsoleLifecycle(t *testing.T) {
 	if resp.StatusCode != http.StatusOK || resp.Request.URL.Path != "/ui/" {
 		t.Fatalf("sign-in failed: status=%d path=%s", resp.StatusCode, resp.Request.URL.Path)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	// 3. Create a styled dynamic code.
 	resp = doRequest(t, client, http.MethodPost, srv.URL+"/ui/codes", url.Values{
@@ -390,7 +390,7 @@ func TestConsoleLifecycle(t *testing.T) {
 	if !strings.HasPrefix(codePath, "/ui/codes/") {
 		t.Fatalf("expected redirect to code detail, got %s", codePath)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	// 4. The list shows it.
 	resp = doRequest(t, client, http.MethodGet, srv.URL+"/ui/", nil, false, nil)
@@ -439,7 +439,7 @@ func TestConsoleLifecycle(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("update destination: status %d, body: %s", resp.StatusCode, readBody(t, resp))
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	resp = doRequest(t, client, http.MethodGet, srv.URL+codePath, nil, false, nil)
 	detailBody = readBody(t, resp)
@@ -494,7 +494,7 @@ func TestConsoleLifecycle(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("revoke token: status %d", resp.StatusCode)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	resp = doRequest(t, client, http.MethodGet, srv.URL+"/ui/tokens", nil, false, nil)
 	tokensBody = readBody(t, resp)
@@ -519,7 +519,7 @@ func TestConsoleLifecycle(t *testing.T) {
 
 func readBody(t *testing.T, resp *http.Response) string {
 	t.Helper()
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	var b strings.Builder
 	buf := make([]byte, 4096)
 	for {

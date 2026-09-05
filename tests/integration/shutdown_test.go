@@ -119,7 +119,7 @@ func TestShutdown_DrainsInFlightThenFlushes(t *testing.T) {
 				t.Errorf("request %d: %v", i, err)
 				return
 			}
-			defer resp.Body.Close()
+			defer func() { _ = resp.Body.Close() }()
 			results[i] = resp.StatusCode
 		}(i)
 	}

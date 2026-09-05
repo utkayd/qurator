@@ -106,9 +106,8 @@ type itProc struct {
 	Base   string // "http://" + Addr
 	Stderr *itSafeBuf
 
-	waitOnce sync.Once
-	waitErr  error
-	done     chan struct{}
+	waitErr error
+	done    chan struct{}
 }
 
 // itEnv builds the hermetic environment for a child: only PATH and HOME are inherited
@@ -337,7 +336,7 @@ func (s *itSession) itDo(method, path string, body any, hdr map[string]string) i
 	if err != nil {
 		s.t.Fatalf("%s %s: %v", method, path, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	raw, err := io.ReadAll(resp.Body)
 	if err != nil {
 		s.t.Fatalf("%s %s: read body: %v", method, path, err)

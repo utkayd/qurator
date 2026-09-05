@@ -182,11 +182,11 @@ func writeFileDurably(path string, data []byte) error {
 // syncDir fsyncs a directory so a completed rename survives a crash. This is the step
 // that is commonly omitted (research.md §3).
 func syncDir(dir string) error {
-	d, err := os.Open(dir)
+	d, err := os.Open(dir) //nolint:gosec // dir is filepath.Dir(objPath/metaPath), built from a key validated by blob.ValidateKey and confined under root; see (*Store).paths
 	if err != nil {
 		return fmt.Errorf("fsblob: open dir: %w", err)
 	}
-	defer d.Close()
+	defer func() { _ = d.Close() }()
 	if err := d.Sync(); err != nil {
 		return fmt.Errorf("fsblob: fsync dir: %w", err)
 	}
@@ -194,7 +194,7 @@ func syncDir(dir string) error {
 }
 
 func (s *Store) readMeta(metaPath string) (*meta, error) {
-	raw, err := os.ReadFile(metaPath)
+	raw, err := os.ReadFile(metaPath) //nolint:gosec // key validated by blob.ValidateKey and confined to root; see (*Store).paths
 	if err != nil {
 		return nil, translate(err)
 	}
@@ -238,7 +238,7 @@ func (s *Store) Get(ctx context.Context, key string) (io.ReadCloser, *blob.BlobI
 	if err != nil {
 		return nil, nil, err
 	}
-	f, err := os.Open(objPath)
+	f, err := os.Open(objPath) //nolint:gosec // key validated by blob.ValidateKey and confined to root; see (*Store).paths
 	if err != nil {
 		return nil, nil, translate(err)
 	}

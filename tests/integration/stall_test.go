@@ -61,7 +61,7 @@ type stStallStore struct {
 	released chan struct{}
 }
 
-var stErrReleased = errors.New("stall store released by test cleanup")
+var errStStoreReleased = errors.New("stall store released by test cleanup")
 
 func (s *stStallStore) InsertScanBatch(ctx context.Context, _ domain.ScanBatch) error {
 	s.batches.Add(1)
@@ -69,7 +69,7 @@ func (s *stStallStore) InsertScanBatch(ctx context.Context, _ domain.ScanBatch) 
 	case <-ctx.Done():
 		return ctx.Err()
 	case <-s.released:
-		return stErrReleased
+		return errStStoreReleased
 	}
 }
 

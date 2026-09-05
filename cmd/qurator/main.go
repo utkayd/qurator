@@ -86,8 +86,8 @@ func main() {
 func run(ctx context.Context, args []string, lookupEnv func(string) (string, bool), stdout *os.File) error {
 	for _, a := range args {
 		if a == "--version" || a == "-v" {
-			fmt.Fprintln(stdout, "qurator", version)
-			return nil
+			_, err := fmt.Fprintln(stdout, "qurator", version)
+			return err
 		}
 	}
 	if len(args) > 0 {
@@ -129,7 +129,7 @@ func run(ctx context.Context, args []string, lookupEnv func(string) (string, boo
 	if err != nil {
 		return fmt.Errorf("open metadata store: %w", err)
 	}
-	defer st.Close()
+	defer func() { _ = st.Close() }()
 	if err := st.Migrate(ctx); err != nil {
 		return fmt.Errorf("migrate: %w", err)
 	}

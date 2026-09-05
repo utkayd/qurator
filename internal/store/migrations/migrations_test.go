@@ -16,7 +16,7 @@ func TestApplySQLiteIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	ctx := context.Background()
 	if err := Apply(ctx, db, SQLite); err != nil {
 		t.Fatalf("first apply: %v", err)
@@ -44,7 +44,7 @@ func TestSQLitePartialShortCodeIndex(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	ctx := context.Background()
 	if err := Apply(ctx, db, SQLite); err != nil {
 		t.Fatalf("apply: %v", err)
@@ -89,7 +89,7 @@ func TestApplyPostgres(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	// One connection, so the session-level search_path below applies to every statement.
 	db.SetMaxOpenConns(1)
 	ctx := context.Background()

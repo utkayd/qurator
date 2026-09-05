@@ -209,7 +209,7 @@ func (s *Store) CreateToken(ctx context.Context, t *domain.APIToken) error {
 	return translate(err)
 }
 
-const tokenCols = `id, user_id, name, secret_hash, created_at, last_used_at, revoked_at, expires_at`
+const tokenCols = `id, user_id, name, secret_hash, created_at, last_used_at, revoked_at, expires_at` //nolint:gosec // column name, not a credential
 
 func scanToken(row interface{ Scan(...any) error }) (*domain.APIToken, error) {
 	var (
@@ -236,7 +236,7 @@ func (s *Store) ListTokens(ctx context.Context, userID string) ([]*domain.APITok
 	if err != nil {
 		return nil, translate(err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	out := []*domain.APIToken{}
 	for rows.Next() {
 		t, err := scanToken(rows)
@@ -436,12 +436,16 @@ func (s *Store) ListCodes(ctx context.Context, f domain.CodeFilter) ([]*domain.C
 		id := arg(p.id)
 		where = append(where, "(c.created_at < "+ts+" OR (c.created_at = "+ts+" AND c.id < "+id+"))")
 	}
-	q := `SELECT ` + codeCols + codeFrom + `WHERE ` + strings.Join(where, " AND ") + ` ORDER BY c.created_at DESC, c.id DESC LIMIT ` + arg(limit+1)
+	// The concatenated fragments are all compile-time constants (codeCols, codeFrom) or
+	// built by arg(), which appends the value to args and substitutes only a $N
+	// placeholder into the SQL text — no user-controlled data ever reaches the query
+	// string itself.
+	q := `SELECT ` + codeCols + codeFrom + `WHERE ` + strings.Join(where, " AND ") + ` ORDER BY c.created_at DESC, c.id DESC LIMIT ` + arg(limit+1) //nolint:gosec // fragments are compile-time constants; values are bound via arg() placeholders
 	rows, err := s.db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, "", translate(err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []*domain.Code
 	for rows.Next() {
 		c, err := scanCode(rows)
@@ -612,7 +616,7 @@ func (s *Store) InsertScanBatch(ctx context.Context, b domain.ScanBatch) error {
 			if err != nil {
 				return translate(err)
 			}
-			defer ins.Close()
+			defer func() { _ = ins.Close() }()
 			for _, ev := range b.Events {
 				if _, err := ins.ExecContext(ctx, ev.CodeID, utc(ev.OccurredAt), ev.UAFamily, string(ev.DeviceCategory), ev.ReferrerHost, ev.IsBot); err != nil {
 					return translate(err)
@@ -625,7 +629,7 @@ func (s *Store) InsertScanBatch(ctx context.Context, b domain.ScanBatch) error {
 			if err != nil {
 				return translate(err)
 			}
-			defer up.Close()
+			defer func() { _ = up.Close() }()
 			for _, r := range b.Rollups {
 				if _, err := up.ExecContext(ctx, r.CodeID, r.HourBucket.UTC().Truncate(time.Hour), string(r.Dimension), r.Value, r.Count); err != nil {
 					return translate(err)
@@ -647,7 +651,7 @@ func (s *Store) QueryAnalytics(ctx context.Context, q domain.AnalyticsQuery) (*d
 	if err != nil {
 		return nil, translate(err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	agg := newAggregator(bucket)
 	for rows.Next() {
 		var (
@@ -759,7 +763,7 @@ func (s *Store) ForEachUser(ctx context.Context, fn func(*domain.User) error) er
 	if err != nil {
 		return translate(err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		u, err := scanUser(rows)
 		if err != nil {
@@ -777,7 +781,7 @@ func (s *Store) ForEachCode(ctx context.Context, fn func(*domain.Code) error) er
 	if err != nil {
 		return translate(err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		c, err := scanCode(rows)
 		if err != nil {
@@ -795,7 +799,7 @@ func (s *Store) ForEachRollup(ctx context.Context, fn func(domain.RollupDelta) e
 	if err != nil {
 		return translate(err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		var (
 			r    domain.RollupDelta
@@ -819,7 +823,7 @@ func (s *Store) ForEachReservation(ctx context.Context, fn func(domain.AliasRese
 	if err != nil {
 		return translate(err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		var (
 			r        domain.AliasReservation

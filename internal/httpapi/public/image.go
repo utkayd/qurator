@@ -57,7 +57,7 @@ func (h *PublicHandler) image(w http.ResponseWriter, r *http.Request) {
 		httpapi.Internal(w, r, err)
 		return
 	}
-	defer rc.Close()
+	defer func() { _ = rc.Close() }()
 	ct := info.ContentType
 	if ct == "" {
 		ct = "image/png"

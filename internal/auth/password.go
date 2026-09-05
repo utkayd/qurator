@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"sync"
 
@@ -63,7 +64,13 @@ func VerifyPassword(phc, password string) (bool, error) {
 	if err != nil || len(want) == 0 {
 		return false, errMalformedPHC
 	}
-	got := argon2.IDKey([]byte(password), salt, t, m, p, uint32(len(want)))
+	if len(want) > math.MaxUint32 {
+		// Unreachable in practice: `want` is a base64-decoded Argon2 digest from a
+		// PHC string, always tens of bytes. Guard explicitly so the int->uint32
+		// conversion below is provably safe rather than merely "probably fine".
+		return false, errMalformedPHC
+	}
+	got := argon2.IDKey([]byte(password), salt, t, m, p, uint32(len(want))) //nolint:gosec // bounds-checked above
 	return subtle.ConstantTimeCompare(got, want) == 1, nil
 }
 

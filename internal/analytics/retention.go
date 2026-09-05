@@ -71,7 +71,7 @@ func (r *Retention) Run(ctx context.Context) {
 func (r *Retention) nextDelay(first bool) time.Duration {
 	var j time.Duration
 	if r.jitter > 0 {
-		j = time.Duration(rand.Int63n(int64(r.jitter)))
+		j = time.Duration(rand.Int63n(int64(r.jitter))) //nolint:gosec // jitter only, not security-sensitive
 	}
 	if first {
 		return j

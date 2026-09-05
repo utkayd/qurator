@@ -40,7 +40,7 @@ func LoadOrCreateSigningSecret(path string) (secret config.Secret, created bool,
 		return "", false, errors.New("auth: signing secret file path is empty" + signingSecretHint)
 	}
 
-	raw, readErr := os.ReadFile(path)
+	raw, readErr := os.ReadFile(path) //nolint:gosec // path is server.data_dir/signing.key from operator config at startup, never request input
 	switch {
 	case readErr == nil:
 		s := strings.TrimSpace(string(raw))
@@ -69,7 +69,7 @@ func LoadOrCreateSigningSecret(path string) (secret config.Secret, created bool,
 	// O_EXCL makes creation atomic with respect to a concurrent first
 	// start on the same data dir: exactly one process wins, the other
 	// re-reads the winner's file rather than clobbering it.
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600) //nolint:gosec // path is server.data_dir/signing.key from operator config at startup, never request input
 	if err != nil {
 		if errors.Is(err, fs.ErrExist) {
 			return LoadOrCreateSigningSecret(path)
@@ -102,4 +102,4 @@ func SigningSecretFilePermissive(path string) bool {
 
 // signingSecretHint is appended to every fatal error so the operator sees
 // the way out that does not involve the filesystem.
-const signingSecretHint = " (set QURATOR_AUTH_SIGNING_SECRET to supply a secret directly, or QURATOR_SERVER_DATA_DIR to move the key file)"
+const signingSecretHint = " (set QURATOR_AUTH_SIGNING_SECRET to supply a secret directly, or QURATOR_SERVER_DATA_DIR to move the key file)" //nolint:gosec // help text, not a credential

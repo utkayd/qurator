@@ -209,7 +209,7 @@ func TestCodes_CreateGeneratedAndAlias(t *testing.T) {
 		t.Fatalf("image blob missing: %v", err)
 	}
 	raw, _ := io.ReadAll(rc)
-	rc.Close()
+	_ = rc.Close()
 	if !bytes.Contains(raw, []byte(testBaseURL+"/r/"+sc)) || bytes.Contains(raw, []byte("example.com/a")) {
 		t.Fatalf("image payload encodes %q, want the scan URL only", raw)
 	}
@@ -490,7 +490,7 @@ func TestCodes_LogoOnDynamicCode(t *testing.T) {
 		t.Fatalf("logo blob missing: %v", err)
 	}
 	got, _ := io.ReadAll(rc)
-	rc.Close()
+	_ = rc.Close()
 	if !bytes.Equal(got, rawLogo) {
 		t.Fatalf("logo blob is not the original bytes (%d vs %d)", len(got), len(rawLogo))
 	}
@@ -501,7 +501,7 @@ func TestCodes_LogoOnDynamicCode(t *testing.T) {
 		t.Fatalf("image blob missing: %v", err)
 	} else {
 		raw, _ := io.ReadAll(rc)
-		rc.Close()
+		_ = rc.Close()
 		if _, err := png.Decode(bytes.NewReader(raw)); err != nil {
 			t.Fatalf("persisted image is not a PNG: %v", err)
 		}

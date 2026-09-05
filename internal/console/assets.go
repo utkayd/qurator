@@ -125,10 +125,10 @@ func (reg *assetRegistry) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Vary", "Accept-Encoding")
 	if a.gzipBody != nil && acceptsGzip(r) {
 		w.Header().Set("Content-Encoding", "gzip")
-		w.Write(a.gzipBody)
+		_, _ = w.Write(a.gzipBody)
 		return
 	}
-	w.Write(a.body)
+	_, _ = w.Write(a.body)
 }
 
 func acceptsGzip(r *http.Request) bool {

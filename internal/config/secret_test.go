@@ -26,7 +26,7 @@ func TestSecret_FmtVerbs(t *testing.T) {
 	assertNoLeak(t, "%v", fmt.Sprintf("%v", s))
 	assertNoLeak(t, "%+v", fmt.Sprintf("%+v", s))
 	assertNoLeak(t, "%#v", fmt.Sprintf("%#v", s))
-	assertNoLeak(t, "%s", fmt.Sprintf("%s", s))
+	assertNoLeak(t, "%s", s.String())
 	assertNoLeak(t, "%q", fmt.Sprintf("%q", s))
 	assertNoLeak(t, "fmt.Sprint", fmt.Sprint(s))
 }

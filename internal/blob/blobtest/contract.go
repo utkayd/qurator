@@ -49,7 +49,7 @@ func RunBlobContract(t *testing.T, newBlob func(t *testing.T) blob.BlobStore) {
 				if err != nil {
 					t.Fatalf("Get: %v", err)
 				}
-				defer rc.Close()
+				defer func() { _ = rc.Close() }()
 
 				got, err := io.ReadAll(rc)
 				if err != nil {
@@ -80,7 +80,7 @@ func RunBlobContract(t *testing.T, newBlob func(t *testing.T) blob.BlobStore) {
 		if err != nil {
 			t.Fatalf("Get: %v", err)
 		}
-		rc.Close()
+		_ = rc.Close()
 
 		statInfo, err := store.Stat(ctx, "etag/key")
 		if err != nil {
@@ -160,7 +160,7 @@ func RunBlobContract(t *testing.T, newBlob func(t *testing.T) blob.BlobStore) {
 		if err != nil {
 			t.Fatalf("Get: %v", err)
 		}
-		defer rc.Close()
+		defer func() { _ = rc.Close() }()
 
 		got, err := io.ReadAll(rc)
 		if err != nil {
@@ -241,7 +241,7 @@ func RunBlobContract(t *testing.T, newBlob func(t *testing.T) blob.BlobStore) {
 		if err != nil {
 			t.Fatalf("Get: %v", err)
 		}
-		defer rc.Close()
+		defer func() { _ = rc.Close() }()
 
 		got, err := io.ReadAll(rc)
 		if err != nil {
@@ -289,7 +289,7 @@ func RunBlobContract(t *testing.T, newBlob func(t *testing.T) blob.BlobStore) {
 		if err != nil {
 			t.Fatalf("Get: %v", err)
 		}
-		rc.Close()
+		_ = rc.Close()
 		if getInfo.ContentType != wantType {
 			t.Fatalf("Get ContentType = %q, want %q", getInfo.ContentType, wantType)
 		}

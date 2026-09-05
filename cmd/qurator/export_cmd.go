@@ -69,18 +69,26 @@ func runExport(ctx context.Context, args []string, lookupEnv func(string) (strin
 	if err != nil {
 		return fmt.Errorf("export: open store: %w", err)
 	}
-	defer st.Close()
+	defer func() { _ = st.Close() }()
 
-	f, err := os.Create(dest)
+	f, err := os.Create(dest) //nolint:gosec // dest is the operator's own --out CLI flag, not request input
 	if err != nil {
 		return fmt.Errorf("export: create %s: %w", dest, err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	if err := export.Write(ctx, st, f); err != nil {
 		return fmt.Errorf("export: %w", err)
 	}
-	fmt.Fprintln(stdout, "export written to", dest)
+	// The archive was just written: a failed flush-on-close means the file on
+	// disk may be incomplete, so surface it rather than relying on the silent
+	// deferred close above.
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("export: close %s: %w", dest, err)
+	}
+	if _, err := fmt.Fprintln(stdout, "export written to", dest); err != nil {
+		return fmt.Errorf("export: %w", err)
+	}
 	return nil
 }
 
@@ -91,13 +99,13 @@ func resolveExportDest(out string) (string, error) {
 		return filepath.Join(out, exportArchiveName), nil
 	}
 	if len(out) > 0 && os.IsPathSeparator(out[len(out)-1]) {
-		if err := os.MkdirAll(out, 0o755); err != nil {
+		if err := os.MkdirAll(out, 0o750); err != nil {
 			return "", fmt.Errorf("create %s: %w", out, err)
 		}
 		return filepath.Join(out, exportArchiveName), nil
 	}
 	if dir := filepath.Dir(out); dir != "." {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
+		if err := os.MkdirAll(dir, 0o750); err != nil {
 			return "", fmt.Errorf("create %s: %w", dir, err)
 		}
 	}
@@ -130,16 +138,18 @@ func runImport(ctx context.Context, args []string, lookupEnv func(string) (strin
 	if err != nil {
 		return fmt.Errorf("import: open store: %w", err)
 	}
-	defer st.Close()
+	defer func() { _ = st.Close() }()
 	if err := st.Migrate(ctx); err != nil {
 		return fmt.Errorf("import: migrate: %w", err)
 	}
 
-	f, err := os.Open(src)
+	f, err := os.Open(src) //nolint:gosec // src is the operator's own --in CLI flag, not request input
 	if err != nil {
 		return fmt.Errorf("import: open %s: %w", src, err)
 	}
-	defer f.Close()
+	// Read-only handle: nothing is buffered locally, so a close failure here
+	// carries no data-loss risk worth surfacing.
+	defer func() { _ = f.Close() }()
 
 	if err := export.Read(ctx, st, f, *force); err != nil {
 		if errors.Is(err, export.ErrNotEmpty) {
@@ -147,6 +157,8 @@ func runImport(ctx context.Context, args []string, lookupEnv func(string) (strin
 		}
 		return fmt.Errorf("import: %w", err)
 	}
-	fmt.Fprintln(stdout, "import complete from", src)
+	if _, err := fmt.Fprintln(stdout, "import complete from", src); err != nil {
+		return fmt.Errorf("import: %w", err)
+	}
 	return nil
 }

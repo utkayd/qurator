@@ -278,11 +278,6 @@ func envVarName(path string) string {
 	return envPrefix + strings.ToUpper(strings.ReplaceAll(path, ".", "_"))
 }
 
-// flagName derives "server-listen" from "server.listen".
-func flagName(path string) string {
-	return strings.ReplaceAll(path, ".", "-")
-}
-
 // envOverrides resolves every leaf field's env var via lookupEnv and
 // returns the flat, typed map[string]any suitable for confmap.Provider.
 // Only keys actually present in the environment are included, so this

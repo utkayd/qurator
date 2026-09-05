@@ -67,5 +67,5 @@ func renderTrendChart(series []domain.SeriesPoint) template.HTML {
 		b.WriteString(d)
 	}
 	b.WriteString(`</svg>`)
-	return template.HTML(b.String())
+	return template.HTML(b.String()) //nolint:gosec // SVG built from numeric series and escaped labels only
 }

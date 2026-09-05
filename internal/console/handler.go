@@ -164,7 +164,7 @@ func (h *Handler) renderError(w http.ResponseWriter, status int, message string)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(status)
-	fmt.Fprintf(w, "<!doctype html><html><body><p class=\"error-banner\" role=\"alert\">%s</p></body></html>", escapeHTML(message))
+	_, _ = fmt.Fprintf(w, "<!doctype html><html><body><p class=\"error-banner\" role=\"alert\">%s</p></body></html>", escapeHTML(message))
 }
 
 func escapeHTML(s string) string {
@@ -239,10 +239,7 @@ func (h *Handler) getCodesList(w http.ResponseWriter, r *http.Request) {
 		httpapi.Internal(w, r, err)
 		return
 	}
-	h.render(w, r, http.StatusOK, "codes_list.html", "Your codes", codesListData{
-		Items:      page.Items,
-		NextCursor: page.NextCursor,
-	})
+	h.render(w, r, http.StatusOK, "codes_list.html", "Your codes", codesListData(page))
 }
 
 type codeNewData struct {
@@ -412,13 +409,13 @@ func (h *Handler) patchCodeDestination(w http.ResponseWriter, r *http.Request) {
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.WriteHeader(status)
-		fmt.Fprintf(w, `<p class="error-banner" role="alert">%s</p>`, escapeHTML(msg))
+		_, _ = fmt.Fprintf(w, `<p class="error-banner" role="alert">%s</p>`, escapeHTML(msg)) //nolint:gosec // msg is HTML-escaped by escapeHTML before interpolation
 		return
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
-	fmt.Fprintf(w, `<p role="status">Destination updated to %s.</p>`, escapeHTML(code.Destination))
+	_, _ = fmt.Fprintf(w, `<p role="status">Destination updated to %s.</p>`, escapeHTML(code.Destination)) //nolint:gosec // code.Destination is HTML-escaped by escapeHTML before interpolation
 }
 
 func (h *Handler) deleteCode(w http.ResponseWriter, r *http.Request) {

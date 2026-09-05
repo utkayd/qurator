@@ -75,7 +75,7 @@ func (h *QRHandler) handle(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		opts, err = parseQuery(r)
 	case http.MethodPost:
-		opts, err = parseBody(r)
+		opts, err = parseBody(w, r)
 	default:
 		w.Header().Set("Allow", "GET, POST")
 		httpapi.WriteError(w, httpapi.CodeInvalidRequest, "Method not allowed.", nil)
@@ -109,7 +109,11 @@ func writeImage(w http.ResponseWriter, r *http.Request, res *qr.Result) {
 	hdr.Set("Content-Type", res.ContentType)
 	hdr.Set("Content-Length", strconv.Itoa(len(res.Bytes)))
 	w.WriteHeader(http.StatusOK)
-	if _, err := w.Write(res.Bytes); err != nil {
+	// res.Bytes is the rendered QR image; Content-Type (an image type) and
+	// X-Content-Type-Options: nosniff are set above before any bytes are
+	// written, so this body can never be sniffed or executed as HTML/script
+	// even though it is derived from caller-controlled QR content.
+	if _, err := w.Write(res.Bytes); err != nil { //nolint:gosec // image body written after Content-Type + nosniff are set; not HTML-injectable
 		// The client went away mid-body; nothing useful to do.
 		return
 	}
@@ -210,7 +214,7 @@ func parseQuery(r *http.Request) (qr.Options, error) {
 	return req.toOptions()
 }
 
-func parseBody(r *http.Request) (qr.Options, error) {
+func parseBody(w http.ResponseWriter, r *http.Request) (qr.Options, error) {
 	mt, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
 	if err != nil {
 		return qr.Options{}, &fieldError{"content-type", "is missing or malformed"}
@@ -219,7 +223,7 @@ func parseBody(r *http.Request) (qr.Options, error) {
 	case "application/json":
 		return parseJSON(r)
 	case "multipart/form-data":
-		return parseMultipart(r)
+		return parseMultipart(w, r)
 	}
 	return qr.Options{}, &fieldError{"content-type", "must be application/json or multipart/form-data"}
 }
@@ -240,9 +244,12 @@ func parseJSON(r *http.Request) (qr.Options, error) {
 // parseMultipart accepts the same fields as the query form plus a `logo` file part
 // (with optional `logo_scale` and `logo_auto_raise` fields). It exists so a browser
 // form or curl can send a logo without base64-encoding it.
-func parseMultipart(r *http.Request) (qr.Options, error) {
-	r.Body = http.MaxBytesReader(nil, r.Body, maxBody)
-	if err := r.ParseMultipartForm(maxMultipartMemory); err != nil {
+func parseMultipart(w http.ResponseWriter, r *http.Request) (qr.Options, error) {
+	// Bound both the raw body and the in-memory multipart parse to maxBody
+	// (which derives from qr.MaxLogoBytes) so a client cannot exhaust memory
+	// with an oversized or maliciously-crafted multipart body.
+	r.Body = http.MaxBytesReader(w, r.Body, maxBody)
+	if err := r.ParseMultipartForm(maxMultipartMemory); err != nil { //nolint:gosec // r.Body is already bounded by http.MaxBytesReader(w, r.Body, maxBody) above, and maxMultipartMemory==maxBody derives from qr.MaxLogoBytes
 		return qr.Options{}, &fieldError{"body", "malformed or oversized multipart body"}
 	}
 	defer func() { _ = r.MultipartForm.RemoveAll() }()

@@ -27,7 +27,7 @@ func main() {
 		os.Exit(2)
 	}
 	path := flag.Arg(0)
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) //nolint:gosec // path is the CLI's own FILE argument, its sole purpose is to read the file the operator names
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "qrdecode:", err)
 		os.Exit(1)
