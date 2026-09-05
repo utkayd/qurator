@@ -118,6 +118,9 @@ func translate(err error) error {
 			if strings.Contains(msg, "codes.short_code") || strings.Contains(msg, "alias_reservations.short_code") {
 				return fmt.Errorf("sqlite: %w: %v", store.ErrAliasTaken, err)
 			}
+			if strings.Contains(msg, "codes.client_ref") {
+				return fmt.Errorf("sqlite: %w: %v", store.ErrClientRefTaken, err)
+			}
 			return fmt.Errorf("sqlite: %w: %v", store.ErrConflict, err)
 		case sqlite3.SQLITE_CONSTRAINT_FOREIGNKEY:
 			return fmt.Errorf("sqlite: %w: %v", store.ErrNotFound, err)
@@ -357,70 +360,116 @@ func (s *Store) TouchTokenLastUsed(ctx context.Context, id string, at time.Time)
 // released, never removed. Re-registering a released short code re-arms that row via the
 // upsert below; an upsert that touches zero rows means the row is still unreleased.
 func (s *Store) CreateCode(ctx context.Context, c *domain.Code) error {
-	if c.ID == "" || c.ShortCode == "" || c.UserID == "" {
-		return errors.New("sqlite: code id, short code and user id are required")
+	return s.CreateCodes(ctx, []*domain.Code{c})
+}
+
+// CreateCodes inserts every code in one transaction, all or nothing (spec 003, FR-207).
+// The callers' structs are only updated once the transaction has committed.
+func (s *Store) CreateCodes(ctx context.Context, cs []*domain.Code) error {
+	if len(cs) == 0 {
+		return nil
 	}
-	shortCode := strings.ToLower(c.ShortCode)
-	created := c.CreatedAt
-	if created.IsZero() {
-		created = now()
-	}
-	updated := c.UpdatedAt
-	if updated.IsZero() {
-		updated = created
-	}
-	state := c.State
-	if state == "" {
-		state = domain.CodeActive
-	}
-	mode := c.Mode
-	if mode == "" {
-		mode = domain.ModeDynamic
-	}
-	styling := c.Styling
-	if styling.ID == "" {
-		styling.ID = domain.NewID("sty")
+	rows := make([]*codeRow, 0, len(cs))
+	for _, c := range cs {
+		r, err := newCodeRow(c)
+		if err != nil {
+			return err
+		}
+		rows = append(rows, r)
 	}
 	err := s.withTx(ctx, func(tx *sql.Tx) error {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO styling_profiles (id, fg_color, bg_color, module_shape, margin_modules, size_px, ec_level, ec_level_effective, logo_blob_key, logo_scale)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			styling.ID, styling.FgColor, styling.BgColor, string(styling.ModuleShape), styling.MarginModules, styling.SizePx,
-			string(styling.ECLevel), string(styling.ECLevelEffective), nullStr(styling.LogoBlobKey), nullFloat(styling.LogoScale)); err != nil {
-			return translate(err)
-		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO codes (id, short_code, is_alias, user_id, mode, destination, state, styling_id, blob_key, blob_etag, version, created_at, updated_at, deleted_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, NULL)`,
-			c.ID, shortCode, b2i(c.IsAlias), c.UserID, string(mode), c.Destination, string(state), styling.ID, c.BlobKey, c.BlobETag,
-			fmtTime(created), fmtTime(updated)); err != nil {
-			return translate(err)
-		}
-		res, err := tx.ExecContext(ctx, `INSERT INTO alias_reservations (short_code, code_id, reserved_at, released_at) VALUES (?, ?, ?, NULL)
-			ON CONFLICT (short_code) DO UPDATE SET code_id = excluded.code_id, reserved_at = excluded.reserved_at, released_at = NULL
-			WHERE alias_reservations.released_at IS NOT NULL`,
-			shortCode, c.ID, fmtTime(now()))
-		if err != nil {
-			return translate(err)
-		}
-		if n, _ := res.RowsAffected(); n == 0 {
-			return fmt.Errorf("sqlite: short code %q reserved: %w", shortCode, store.ErrAliasTaken)
+		for _, r := range rows {
+			if err := insertCode(ctx, tx, r); err != nil {
+				return err
+			}
 		}
 		return nil
 	})
 	if err != nil {
 		return err
 	}
-	c.ShortCode = shortCode
-	c.Version = 1
-	c.State = state
-	c.Mode = mode
-	c.Styling = styling
-	c.CreatedAt = created.UTC().Truncate(time.Microsecond)
-	c.UpdatedAt = updated.UTC().Truncate(time.Microsecond)
-	c.DeletedAt = nil
+	for _, r := range rows {
+		r.reflect()
+	}
 	return nil
 }
 
-const codeCols = `c.id, c.short_code, c.is_alias, c.user_id, c.mode, c.destination, c.state, c.blob_key, c.blob_etag, c.version, c.created_at, c.updated_at, c.deleted_at,
+// codeRow is one code with every defaulted value resolved, so the insert and the
+// reflection back to the caller agree.
+type codeRow struct {
+	c                *domain.Code
+	shortCode        string
+	created, updated time.Time
+	state            domain.CodeState
+	mode             domain.CodeMode
+	styling          domain.Styling
+}
+
+func newCodeRow(c *domain.Code) (*codeRow, error) {
+	if c.ID == "" || c.ShortCode == "" || c.UserID == "" {
+		return nil, errors.New("sqlite: code id, short code and user id are required")
+	}
+	r := &codeRow{c: c, shortCode: strings.ToLower(c.ShortCode), created: c.CreatedAt, updated: c.UpdatedAt, state: c.State, mode: c.Mode, styling: c.Styling}
+	if r.created.IsZero() {
+		r.created = now()
+	}
+	if r.updated.IsZero() {
+		r.updated = r.created
+	}
+	if r.state == "" {
+		r.state = domain.CodeActive
+	}
+	if r.mode == "" {
+		r.mode = domain.ModeDynamic
+	}
+	if r.styling.ID == "" {
+		r.styling.ID = domain.NewID("sty")
+	}
+	return r, nil
+}
+
+// reflect writes the persisted values back onto the caller's struct, as CreateCode
+// always has.
+func (r *codeRow) reflect() {
+	c := r.c
+	c.ShortCode = r.shortCode
+	c.Version = 1
+	c.State = r.state
+	c.Mode = r.mode
+	c.Styling = r.styling
+	c.CreatedAt = r.created.UTC().Truncate(time.Microsecond)
+	c.UpdatedAt = r.updated.UTC().Truncate(time.Microsecond)
+	c.DeletedAt = nil
+}
+
+func insertCode(ctx context.Context, tx *sql.Tx, r *codeRow) error {
+	c, styling := r.c, r.styling
+	if _, err := tx.ExecContext(ctx, `INSERT INTO styling_profiles (id, fg_color, bg_color, module_shape, margin_modules, size_px, ec_level, ec_level_effective, logo_blob_key, logo_scale)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		styling.ID, styling.FgColor, styling.BgColor, string(styling.ModuleShape), styling.MarginModules, styling.SizePx,
+		string(styling.ECLevel), string(styling.ECLevelEffective), nullStr(styling.LogoBlobKey), nullFloat(styling.LogoScale)); err != nil {
+		return translate(err)
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO codes (id, short_code, is_alias, user_id, mode, client_ref, destination, state, styling_id, blob_key, blob_etag, version, created_at, updated_at, deleted_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, NULL)`,
+		c.ID, r.shortCode, b2i(c.IsAlias), c.UserID, string(r.mode), nullStr(c.ClientRef), c.Destination, string(r.state), styling.ID, c.BlobKey, c.BlobETag,
+		fmtTime(r.created), fmtTime(r.updated)); err != nil {
+		return translate(err)
+	}
+	res, err := tx.ExecContext(ctx, `INSERT INTO alias_reservations (short_code, code_id, reserved_at, released_at) VALUES (?, ?, ?, NULL)
+		ON CONFLICT (short_code) DO UPDATE SET code_id = excluded.code_id, reserved_at = excluded.reserved_at, released_at = NULL
+		WHERE alias_reservations.released_at IS NOT NULL`,
+		r.shortCode, c.ID, fmtTime(now()))
+	if err != nil {
+		return translate(err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("sqlite: short code %q reserved: %w", r.shortCode, store.ErrAliasTaken)
+	}
+	return nil
+}
+
+const codeCols = `c.id, c.short_code, c.is_alias, c.user_id, c.mode, COALESCE(c.client_ref, ''), c.destination, c.state, c.blob_key, c.blob_etag, c.version, c.created_at, c.updated_at, c.deleted_at,
 	sp.id, sp.fg_color, sp.bg_color, sp.module_shape, sp.margin_modules, sp.size_px, sp.ec_level, sp.ec_level_effective, COALESCE(sp.logo_blob_key, ''), COALESCE(sp.logo_scale, 0)`
 
 const codeFrom = ` FROM codes c JOIN styling_profiles sp ON sp.id = c.styling_id `
@@ -439,7 +488,7 @@ func scanCode(row interface{ Scan(...any) error }) (*domain.Code, error) {
 		logoKey          string
 		logoScale        float64
 	)
-	if err := row.Scan(&c.ID, &c.ShortCode, &isAlias, &c.UserID, &mode, &c.Destination, &state, &c.BlobKey, &c.BlobETag, &c.Version, &created, &updated, &deleted,
+	if err := row.Scan(&c.ID, &c.ShortCode, &isAlias, &c.UserID, &mode, &c.ClientRef, &c.Destination, &state, &c.BlobKey, &c.BlobETag, &c.Version, &created, &updated, &deleted,
 		&c.Styling.ID, &c.Styling.FgColor, &c.Styling.BgColor, &shape, &marginModules, &sizePx, &ec, &ecEff, &logoKey, &logoScale); err != nil {
 		return nil, translate(err)
 	}
@@ -478,6 +527,13 @@ func (s *Store) GetCodeByShortCode(ctx context.Context, shortCode string) (*doma
 
 func (s *Store) GetCodeByID(ctx context.Context, id, userID string) (*domain.Code, error) {
 	return scanCode(s.r.QueryRowContext(ctx, `SELECT `+codeCols+codeFrom+`WHERE c.id = ? AND c.user_id = ?`, id, userID))
+}
+
+func (s *Store) GetCodeByClientRef(ctx context.Context, userID, ref string) (*domain.Code, error) {
+	if ref == "" {
+		return nil, notFound("client_ref")
+	}
+	return scanCode(s.r.QueryRowContext(ctx, `SELECT `+codeCols+codeFrom+`WHERE c.user_id = ? AND c.client_ref = ?`, userID, ref))
 }
 
 type cursorPos struct {

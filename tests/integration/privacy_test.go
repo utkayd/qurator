@@ -65,8 +65,18 @@ var pvForbiddenWords = map[string]bool{
 // pvForbiddenSubstrings are unambiguous fragments checked anywhere in a column name.
 var pvForbiddenSubstrings = []string{"ipaddr", "addr", "geo", "country"}
 
+// pvAllowedColumns are exact column names that trip the word list but demonstrably hold
+// nothing about a scanner. codes.client_ref is the API caller's own idempotency key on
+// the API caller's own code (spec 003, FR-206): "client" there is the API client, and
+// the value is chosen by the authenticated owner before any scan ever happens. The row
+// check below still scans its contents like every other text column.
+var pvAllowedColumns = map[string]bool{"client_ref": true}
+
 func pvColumnLooksPrivate(col string) bool {
 	lc := strings.ToLower(col)
+	if pvAllowedColumns[lc] {
+		return false
+	}
 	for _, w := range strings.Split(lc, "_") {
 		if pvForbiddenWords[w] {
 			return true

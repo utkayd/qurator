@@ -196,6 +196,11 @@ func run(ctx context.Context, args []string, lookupEnv func(string) (string, boo
 	codeSvc := codes.NewService(st, bs, codesRenderer{qrRenderer}, codes.NewCache(), codes.Config{
 		BaseURL:        cfg.Server.BaseURL,
 		AllowedSchemes: cfg.Codes.AllowedSchemes,
+		URLMode:        cfg.Images.URLMode,
+		PublicBaseURL:  cfg.Images.PublicBaseURL,
+		PresignTTL:     cfg.Images.PresignTTL,
+		BatchMax:       cfg.Codes.BatchMax,
+		BatchWorkers:   cfg.Codes.BatchWorkers,
 	})
 
 	handlers := httpapi.Handlers{
@@ -204,6 +209,7 @@ func run(ctx context.Context, args []string, lookupEnv func(string) (string, boo
 			Blob:                bs,
 			Recorder:            recorder,
 			FallbackDestination: cfg.Codes.FallbackDestination,
+			ImagesDisabled:      !cfg.Images.ServeViaInstance,
 			Classify: func(ua string) (string, domain.DeviceCategory, bool) {
 				c := classifier.Classify(ua)
 				return c.UAFamily, c.DeviceCategory, c.IsBot

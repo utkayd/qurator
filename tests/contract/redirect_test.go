@@ -73,6 +73,14 @@ func (c *countingStore) CreateCode(ctx context.Context, code *domain.Code) error
 	c.hit()
 	return c.inner.CreateCode(ctx, code)
 }
+func (c *countingStore) CreateCodes(ctx context.Context, codes []*domain.Code) error {
+	c.hit()
+	return c.inner.CreateCodes(ctx, codes)
+}
+func (c *countingStore) GetCodeByClientRef(ctx context.Context, userID, ref string) (*domain.Code, error) {
+	c.hit()
+	return c.inner.GetCodeByClientRef(ctx, userID, ref)
+}
 func (c *countingStore) GetCodeByShortCode(ctx context.Context, sc string) (*domain.Code, error) {
 	c.hit()
 	return c.inner.GetCodeByShortCode(ctx, sc)

@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
@@ -145,4 +146,36 @@ func (s *Store) Ping(ctx context.Context) error {
 		return fmt.Errorf("s3blob: bucket %q does not exist", s.bucket)
 	}
 	return nil
+}
+
+// ---- blob.URLer (spec 003) --------------------------------------------------------------
+
+var _ blob.URLer = (*Store)(nil)
+
+// PublicURL is base + "/" + key. The base is whatever the operator put in front of the
+// bucket (the bucket's own website endpoint or a CDN), so no bucket name is inserted.
+func (s *Store) PublicURL(key string, base string) (string, error) {
+	if err := blob.ValidateKey(key); err != nil {
+		return "", err
+	}
+	if base == "" {
+		return "", errors.New("s3blob: public base URL is empty")
+	}
+	return strings.TrimRight(base, "/") + "/" + key, nil
+}
+
+// PresignedURL signs a GET for key with the client's credentials. minio computes the
+// signature locally — no round trip — so this is cheap enough to run per response.
+func (s *Store) PresignedURL(ctx context.Context, key string, ttl time.Duration) (string, error) {
+	if err := blob.ValidateKey(key); err != nil {
+		return "", err
+	}
+	if ttl <= 0 {
+		return "", errors.New("s3blob: presign ttl must be positive")
+	}
+	u, err := s.client.PresignedGetObject(ctx, s.bucket, key, ttl, nil)
+	if err != nil {
+		return "", fmt.Errorf("s3blob: presign: %w", err)
+	}
+	return u.String(), nil
 }

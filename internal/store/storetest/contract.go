@@ -20,7 +20,8 @@ import (
 //
 // The first twelve numbered requirements come from contracts/store.md §Store; Req13 pins
 // the bulk-iteration walkers export depends on (FR-055); Req14 pins the code mode
-// column (spec 002, FR-101/FR-108). The remaining
+// column (spec 002, FR-101/FR-108); Req15 pins client_ref uniqueness and batch atomicity
+// (spec 003, FR-206/FR-207). The remaining
 // subtests pin behaviours of the frozen interface that the numbered list leaves implicit
 // (users, tokens, alias availability, listing filters).
 func RunStoreContract(t *testing.T, newStore func(t *testing.T) store.Store) {
@@ -817,6 +818,137 @@ func RunStoreContract(t *testing.T, newStore func(t *testing.T) store.Store) {
 		}
 		if got, _ := s.GetCodeByID(ctx(t), dir.ID, u.ID); got.Mode != domain.ModeDirect {
 			t.Fatalf("Mode changed across mutations: %q", got.Mode)
+		}
+	})
+
+	t.Run("Req15_ClientRefUniquePerUserAndBatchAtomic", func(t *testing.T) {
+		s := newStore(t)
+		ua := mustUser(t, s, "a@example.com")
+		ub := mustUser(t, s, "b@example.com")
+
+		// Round trip, lookup by ref, and per-user scoping: the same ref is fine for
+		// another user.
+		a1 := newCode(ua.ID, "ref-a1", true)
+		a1.ClientRef = "order-1"
+		if err := s.CreateCode(ctx(t), a1); err != nil {
+			t.Fatalf("CreateCode(a1): %v", err)
+		}
+		got, err := s.GetCodeByID(ctx(t), a1.ID, ua.ID)
+		if err != nil || got.ClientRef != "order-1" {
+			t.Fatalf("GetCodeByID(a1): ClientRef=%q err=%v, want order-1", got.ClientRef, err)
+		}
+		byRef, err := s.GetCodeByClientRef(ctx(t), ua.ID, "order-1")
+		if err != nil || byRef.ID != a1.ID {
+			t.Fatalf("GetCodeByClientRef(a, order-1): id=%q err=%v, want %q", byRef.ID, err, a1.ID)
+		}
+		if _, err := s.GetCodeByClientRef(ctx(t), ub.ID, "order-1"); !errors.Is(err, store.ErrNotFound) {
+			t.Fatalf("GetCodeByClientRef(b, order-1): %v, want ErrNotFound (refs are per user)", err)
+		}
+		if _, err := s.GetCodeByClientRef(ctx(t), ua.ID, "never"); !errors.Is(err, store.ErrNotFound) {
+			t.Fatalf("GetCodeByClientRef(a, never): %v, want ErrNotFound", err)
+		}
+		if _, err := s.GetCodeByClientRef(ctx(t), ua.ID, ""); !errors.Is(err, store.ErrNotFound) {
+			t.Fatalf("GetCodeByClientRef(a, empty): %v, want ErrNotFound (empty means none)", err)
+		}
+		b1 := newCode(ub.ID, "ref-b1", true)
+		b1.ClientRef = "order-1"
+		if err := s.CreateCode(ctx(t), b1); err != nil {
+			t.Fatalf("CreateCode(b1) with another user's ref: %v", err)
+		}
+		// Same user twice is refused with the dedicated sentinel; case matters (opaque).
+		dup := newCode(ua.ID, "ref-a2", true)
+		dup.ClientRef = "order-1"
+		if err := s.CreateCode(ctx(t), dup); !errors.Is(err, store.ErrClientRefTaken) {
+			t.Fatalf("CreateCode(dup ref): %v, want ErrClientRefTaken", err)
+		}
+		if _, err := s.GetCodeByID(ctx(t), dup.ID, ua.ID); !errors.Is(err, store.ErrNotFound) {
+			t.Fatalf("refused row was persisted: %v", err)
+		}
+		// Codes without a ref never collide with each other.
+		for _, sc := range []string{"ref-none-1", "ref-none-2"} {
+			mustCode(t, s, ua.ID, sc, true)
+		}
+		// A deleted code keeps its ref (the row survives, so the key does too).
+		if err := s.DeleteCode(ctx(t), a1.ID, ua.ID); err != nil {
+			t.Fatalf("DeleteCode(a1): %v", err)
+		}
+		if got, err := s.GetCodeByClientRef(ctx(t), ua.ID, "order-1"); err != nil || got.ID != a1.ID || got.State != domain.CodeDeleted {
+			t.Fatalf("GetCodeByClientRef after delete: %+v err=%v, want the deleted row", got, err)
+		}
+
+		// CreateCodes: one bad row (a taken client_ref) means nothing is inserted.
+		batch := []*domain.Code{newCode(ua.ID, "batch-1", true), newCode(ua.ID, "batch-2", true), newCode(ua.ID, "batch-3", true)}
+		batch[0].ClientRef = "b-1"
+		batch[1].ClientRef = "order-1" // taken by a1
+		batch[2].ClientRef = "b-3"
+		if err := s.CreateCodes(ctx(t), batch); !errors.Is(err, store.ErrClientRefTaken) {
+			t.Fatalf("CreateCodes with a taken ref: %v, want ErrClientRefTaken", err)
+		}
+		for _, c := range batch {
+			if _, err := s.GetCodeByID(ctx(t), c.ID, ua.ID); !errors.Is(err, store.ErrNotFound) {
+				t.Fatalf("CreateCodes left %s behind after a failure: %v", c.ShortCode, err)
+			}
+			if ok, _ := s.IsAliasAvailable(ctx(t), c.ShortCode); !ok {
+				t.Fatalf("CreateCodes reserved %q despite failing", c.ShortCode)
+			}
+		}
+		// The same goes for a duplicate WITHIN the batch, and for a taken alias.
+		twice := []*domain.Code{newCode(ua.ID, "batch-4", true), newCode(ua.ID, "batch-5", true)}
+		twice[0].ClientRef, twice[1].ClientRef = "same", "same"
+		if err := s.CreateCodes(ctx(t), twice); !errors.Is(err, store.ErrClientRefTaken) {
+			t.Fatalf("CreateCodes with an in-batch duplicate ref: %v, want ErrClientRefTaken", err)
+		}
+		alias := []*domain.Code{newCode(ua.ID, "batch-6", true), newCode(ua.ID, "ref-b1", true)}
+		if err := s.CreateCodes(ctx(t), alias); !errors.Is(err, store.ErrAliasTaken) {
+			t.Fatalf("CreateCodes with a taken alias: %v, want ErrAliasTaken", err)
+		}
+		for _, sc := range []string{"batch-4", "batch-5", "batch-6"} {
+			if ok, _ := s.IsAliasAvailable(ctx(t), sc); !ok {
+				t.Fatalf("failed CreateCodes reserved %q", sc)
+			}
+		}
+		// An empty batch is a valid no-op; a good batch lands whole with every row
+		// reflected back like CreateCode does.
+		if err := s.CreateCodes(ctx(t), nil); err != nil {
+			t.Fatalf("CreateCodes(empty): %v", err)
+		}
+		good := []*domain.Code{newCode(ua.ID, "Good-1", true), newCode(ua.ID, "good-2", false), newCode(ua.ID, "good-3", true)}
+		good[0].ClientRef = "g-1"
+		good[2].ClientRef = "g-3"
+		good[2].Mode = domain.ModeDirect
+		if err := s.CreateCodes(ctx(t), good); err != nil {
+			t.Fatalf("CreateCodes(good): %v", err)
+		}
+		if good[0].ShortCode != "good-1" || good[0].Version != 1 || good[1].Mode != domain.ModeDynamic || good[0].Styling.ID == "" {
+			t.Fatalf("CreateCodes did not reflect persisted values: %+v", good[0])
+		}
+		for _, c := range good {
+			got, err := s.GetCodeByID(ctx(t), c.ID, ua.ID)
+			if err != nil {
+				t.Fatalf("GetCodeByID(%s) after CreateCodes: %v", c.ShortCode, err)
+			}
+			if got.ClientRef != c.ClientRef || got.Mode != c.Mode || got.Version != 1 {
+				t.Fatalf("CreateCodes(%s) round trip: %+v", c.ShortCode, got)
+			}
+		}
+		items, _, err := s.ListCodes(ctx(t), domain.CodeFilter{UserID: ua.ID, Limit: 100})
+		if err != nil {
+			t.Fatalf("ListCodes: %v", err)
+		}
+		refs := map[string]string{}
+		for _, it := range items {
+			refs[it.ShortCode] = it.ClientRef
+		}
+		if refs["good-1"] != "g-1" || refs["good-3"] != "g-3" || refs["good-2"] != "" {
+			t.Fatalf("ListCodes client refs: %v", refs)
+		}
+		// Export walks through ForEachCode, so it must carry client_ref too.
+		seen := map[string]string{}
+		if err := s.ForEachCode(ctx(t), func(c *domain.Code) error { seen[c.ID] = c.ClientRef; return nil }); err != nil {
+			t.Fatalf("ForEachCode: %v", err)
+		}
+		if seen[good[0].ID] != "g-1" || seen[a1.ID] != "order-1" {
+			t.Fatalf("ForEachCode client refs: %v", seen)
 		}
 	})
 

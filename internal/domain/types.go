@@ -64,11 +64,14 @@ const (
 // Code is a persisted QR code. A dynamic code's destination may change after printing;
 // a direct code's is printed into the image (see CodeMode).
 type Code struct {
-	ID          string
-	ShortCode   string // generated or alias; immutable; unique case-insensitively
-	IsAlias     bool
-	UserID      string
-	Mode        CodeMode // immutable; empty on input means ModeDynamic
+	ID        string
+	ShortCode string // generated or alias; immutable; unique case-insensitively
+	IsAlias   bool
+	UserID    string
+	Mode      CodeMode // immutable; empty on input means ModeDynamic
+	// ClientRef is the caller's idempotency key (spec 003, FR-206): opaque, at most 128
+	// characters, unique per user among the codes that carry one. Empty means none.
+	ClientRef   string
 	Destination string
 	State       CodeState
 	Styling     Styling

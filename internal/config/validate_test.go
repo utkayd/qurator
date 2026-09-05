@@ -26,7 +26,105 @@ func validConfig() Config {
 	c.Render.MaxPayloadBytes = 2953
 	c.Analytics.RetentionDays = 365
 	c.Log.Level = "info"
+	c.Codes.BatchMax = 500
+	c.Codes.BatchWorkers = 4
+	c.Images.URLMode = "instance"
+	c.Images.PresignTTL = 3_600_000_000_000 // 1h in ns
+	c.Images.ServeViaInstance = true
 	return c
+}
+
+// s3Config flips validConfig onto the S3 blob driver so image URL rules can be tested
+// against the one driver that can address its objects.
+func s3Config() Config {
+	c := validConfig()
+	c.Blob.Driver = "s3"
+	c.Blob.S3.Endpoint = "s3.example"
+	c.Blob.S3.Bucket = "codes"
+	return c
+}
+
+// TestValidate_ImagesAndBatch pins the spec 003 startup refusals (FR-201, US1 scenario 4,
+// US2 scenario 2) and the public_base_url normalisation.
+func TestValidate_ImagesAndBatch(t *testing.T) {
+	cases := []struct {
+		name    string
+		base    func() Config
+		mutate  func(*Config)
+		wantErr string
+	}{
+		{"defaults are fine", validConfig, func(*Config) {}, ""},
+		{"unknown url_mode", validConfig, func(c *Config) { c.Images.URLMode = "cdn" }, "images.url_mode must be one of"},
+		{"public with fs driver", validConfig, func(c *Config) { c.Images.URLMode = "public"; c.Images.PublicBaseURL = "https://cdn.example" }, `blob.driver is "fs"`},
+		{"presigned with fs driver", validConfig, func(c *Config) { c.Images.URLMode = "presigned" }, `blob.driver is "fs"`},
+		{"public with s3 but no base url", s3Config, func(c *Config) { c.Images.URLMode = "public" }, "images.public_base_url is required"},
+		{"public with s3 and base url is fine", s3Config, func(c *Config) { c.Images.URLMode = "public"; c.Images.PublicBaseURL = "https://cdn.example/codes" }, ""},
+		{"presigned with s3 is fine", s3Config, func(c *Config) { c.Images.URLMode = "presigned" }, ""},
+		{"base url without scheme", s3Config, func(c *Config) { c.Images.URLMode = "public"; c.Images.PublicBaseURL = "cdn.example" }, "absolute http or https URL"},
+		{"base url with ftp scheme", s3Config, func(c *Config) { c.Images.URLMode = "public"; c.Images.PublicBaseURL = "ftp://cdn.example" }, "absolute http or https URL"},
+		{"presign ttl zero", s3Config, func(c *Config) { c.Images.URLMode = "presigned"; c.Images.PresignTTL = 0 }, "images.presign_ttl must be > 0"},
+		{"serving disabled in instance mode", validConfig, func(c *Config) { c.Images.ServeViaInstance = false }, "images.serve_via_instance is false but images.url_mode is instance"},
+		{"serving disabled in public mode is fine", s3Config, func(c *Config) {
+			c.Images.ServeViaInstance = false
+			c.Images.URLMode = "public"
+			c.Images.PublicBaseURL = "https://cdn.example"
+		}, ""},
+		{"batch_max zero", validConfig, func(c *Config) { c.Codes.BatchMax = 0 }, "codes.batch_max must be between 1 and 5000"},
+		{"batch_max too large", validConfig, func(c *Config) { c.Codes.BatchMax = 5001 }, "codes.batch_max must be between 1 and 5000"},
+		{"batch_workers zero", validConfig, func(c *Config) { c.Codes.BatchWorkers = 0 }, "codes.batch_workers must be between 1 and 64"},
+		{"batch_workers too large", validConfig, func(c *Config) { c.Codes.BatchWorkers = 65 }, "codes.batch_workers must be between 1 and 64"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := tc.base()
+			tc.mutate(&c)
+			err := c.Validate()
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("Validate() = %v, want nil", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("Validate() = %v, want error containing %q", err, tc.wantErr)
+			}
+		})
+	}
+
+	// Trailing slashes are normalised away so URL building never doubles them.
+	c := s3Config()
+	c.Images.URLMode = "public"
+	c.Images.PublicBaseURL = "https://cdn.example/codes///"
+	if err := c.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if c.Images.PublicBaseURL != "https://cdn.example/codes" {
+		t.Fatalf("public_base_url normalised to %q", c.Images.PublicBaseURL)
+	}
+
+	// Env names follow the existing QURATOR_<SECTION>_<KEY> pattern.
+	env := map[string]string{
+		"QURATOR_BLOB_DRIVER":               "s3",
+		"QURATOR_BLOB_S3_ENDPOINT":          "s3.example",
+		"QURATOR_BLOB_S3_BUCKET":            "codes",
+		"QURATOR_IMAGES_URL_MODE":           "public",
+		"QURATOR_IMAGES_PUBLIC_BASE_URL":    "https://cdn.example/",
+		"QURATOR_IMAGES_PRESIGN_TTL":        "30m",
+		"QURATOR_IMAGES_SERVE_VIA_INSTANCE": "false",
+		"QURATOR_CODES_BATCH_MAX":           "1000",
+		"QURATOR_CODES_BATCH_WORKERS":       "8",
+		"QURATOR_AUTH_DEV_MODE":             "true",
+	}
+	cfg, err := Load(nil, func(k string) (string, bool) { v, ok := env[k]; return v, ok })
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Images.URLMode != "public" || cfg.Images.PublicBaseURL != "https://cdn.example" || cfg.Images.PresignTTL.Minutes() != 30 || cfg.Images.ServeViaInstance {
+		t.Fatalf("images from env: %+v", cfg.Images)
+	}
+	if cfg.Codes.BatchMax != 1000 || cfg.Codes.BatchWorkers != 8 {
+		t.Fatalf("codes batch from env: %+v", cfg.Codes)
+	}
 }
 
 func TestValidate_Rules(t *testing.T) {

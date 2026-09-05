@@ -78,6 +78,29 @@ func TestSQLitePartialShortCodeIndex(t *testing.T) {
 	if err := insertCode("cod_4", "spring-sale", "deleted"); err != nil {
 		t.Fatalf("a second deleted row with the same short code must be allowed: %v", err)
 	}
+
+	// 0004: client_ref is nullable and unique per user only among rows that carry one.
+	mustExec(`INSERT INTO users(id,email,is_admin,token_version,source,created_at) VALUES('usr_2','b@x.com',0,0,'local','2026-01-01T00:00:00Z')`)
+	withRef := func(id, user, ref any) error {
+		_, err := db.ExecContext(ctx, `INSERT INTO codes(id,short_code,is_alias,user_id,client_ref,destination,state,styling_id,blob_key,blob_etag,version,created_at,updated_at)
+			VALUES(?,?,1,?,?,'https://x','active','sty_1','k','e',1,'2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')`, id, id, user, ref)
+		return err
+	}
+	if err := withRef("cod_r1", "usr_1", "order-1"); err != nil {
+		t.Fatalf("first client_ref: %v", err)
+	}
+	if err := withRef("cod_r2", "usr_1", "order-1"); err == nil {
+		t.Fatal("same user, same client_ref must violate codes_user_client_ref")
+	}
+	if err := withRef("cod_r3", "usr_2", "order-1"); err != nil {
+		t.Fatalf("same client_ref for another user must be allowed: %v", err)
+	}
+	if err := withRef("cod_r4", "usr_1", nil); err != nil {
+		t.Fatalf("NULL client_ref: %v", err)
+	}
+	if err := withRef("cod_r5", "usr_1", nil); err != nil {
+		t.Fatalf("a second NULL client_ref for the same user must be allowed: %v", err)
+	}
 }
 
 func TestApplyPostgres(t *testing.T) {
@@ -158,6 +181,29 @@ func TestApplyPostgres(t *testing.T) {
 	var mode string
 	if err := db.QueryRowContext(ctx, `SELECT mode FROM codes WHERE id = 'cod_2'`).Scan(&mode); err != nil || mode != "dynamic" {
 		t.Fatalf("row inserted without mode reads %q (err %v), want dynamic", mode, err)
+	}
+
+	// 0004: client_ref is nullable and unique per user only among rows that carry one.
+	mustExec(`INSERT INTO users(id,email,is_admin,token_version,source,created_at) VALUES('usr_2','b@x.com',false,0,'local',now())`)
+	withRef := func(id, user string, ref any) error {
+		_, err := db.ExecContext(ctx, `INSERT INTO codes(id,short_code,is_alias,user_id,client_ref,destination,state,styling_id,blob_key,blob_etag,version,created_at,updated_at)
+			VALUES($1,$1,true,$2,$3,'https://x','active','sty_1','k','e',1,now(),now())`, id, user, ref)
+		return err
+	}
+	if err := withRef("cod_r1", "usr_1", "order-1"); err != nil {
+		t.Fatalf("first client_ref: %v", err)
+	}
+	if err := withRef("cod_r2", "usr_1", "order-1"); err == nil {
+		t.Fatal("same user, same client_ref must violate codes_user_client_ref")
+	}
+	if err := withRef("cod_r3", "usr_2", "order-1"); err != nil {
+		t.Fatalf("same client_ref for another user must be allowed: %v", err)
+	}
+	if err := withRef("cod_r4", "usr_1", nil); err != nil {
+		t.Fatalf("NULL client_ref: %v", err)
+	}
+	if err := withRef("cod_r5", "usr_1", nil); err != nil {
+		t.Fatalf("a second NULL client_ref for the same user must be allowed: %v", err)
 	}
 }
 

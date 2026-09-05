@@ -457,6 +457,21 @@ func (l *logoSpec) decode() (*qr.Logo, error) {
 // writeQRError maps every error the parser or renderer can produce onto the stable
 // catalogue in contracts/errors.md, with structured details.
 func writeQRError(w http.ResponseWriter, r *http.Request, err error) {
+	if errors.Is(err, context.Canceled) {
+		// The client disconnected; there is nobody to answer.
+		return
+	}
+	d, ok := qrErrorDetail(err)
+	if !ok {
+		httpapi.Internal(w, r, err)
+		return
+	}
+	httpapi.WriteError(w, d.Code, d.Message, d.Details)
+}
+
+// qrErrorDetail maps the renderer's typed errors onto the stable catalogue. ok is false
+// for anything that is not a renderer validation error (an internal failure).
+func qrErrorDetail(err error) (d httpapi.ErrorDetail, ok bool) {
 	var (
 		fe  *fieldError
 		ctl *qr.ContentTooLargeError
@@ -468,33 +483,29 @@ func writeQRError(w http.ResponseWriter, r *http.Request, err error) {
 	)
 	switch {
 	case errors.As(err, &ce):
-		httpapi.WriteError(w, httpapi.CodeContrastTooLow,
-			fmt.Sprintf("Foreground/background contrast is %.2f:1; at least %.1f:1 is required.", ce.Ratio, ce.Minimum),
-			map[string]any{"ratio": ce.Ratio, "minimum": ce.Minimum})
+		return httpapi.ErrorDetail{Code: httpapi.CodeContrastTooLow,
+			Message: fmt.Sprintf("Foreground/background contrast is %.2f:1; at least %.1f:1 is required.", ce.Ratio, ce.Minimum),
+			Details: map[string]any{"ratio": ce.Ratio, "minimum": ce.Minimum}}, true
 	case errors.As(err, &le):
-		httpapi.WriteError(w, httpapi.CodeLogoTooLarge,
-			fmt.Sprintf("Logo covers %.0f%% of the symbol; the maximum at error correction level %s is %.0f%%.", le.Scale*100, le.Level, le.MaxScale*100),
-			map[string]any{"scale": le.Scale, "max_scale": le.MaxScale, "ec_level": string(le.Level)})
+		return httpapi.ErrorDetail{Code: httpapi.CodeLogoTooLarge,
+			Message: fmt.Sprintf("Logo covers %.0f%% of the symbol; the maximum at error correction level %s is %.0f%%.", le.Scale*100, le.Level, le.MaxScale*100),
+			Details: map[string]any{"scale": le.Scale, "max_scale": le.MaxScale, "ec_level": string(le.Level)}}, true
 	case errors.As(err, &fe):
-		httpapi.WriteError(w, httpapi.CodeInvalidRequest, fmt.Sprintf("Parameter '%s' %s.", fe.field, fe.msg), map[string]any{"field": fe.field})
+		return httpapi.ErrorDetail{Code: httpapi.CodeInvalidRequest, Message: fmt.Sprintf("Parameter '%s' %s.", fe.field, fe.msg), Details: map[string]any{"field": fe.field}}, true
 	case errors.As(err, &ioe):
-		httpapi.WriteError(w, httpapi.CodeInvalidRequest, fmt.Sprintf("Parameter '%s' is invalid: %s.", ioe.Field, ioe.Reason), map[string]any{"field": ioe.Field})
+		return httpapi.ErrorDetail{Code: httpapi.CodeInvalidRequest, Message: fmt.Sprintf("Parameter '%s' is invalid: %s.", ioe.Field, ioe.Reason), Details: map[string]any{"field": ioe.Field}}, true
 	case errors.As(err, &ctl):
-		httpapi.WriteError(w, httpapi.CodeContentTooLarge,
-			fmt.Sprintf("Content is %d bytes; the maximum at error correction level %s is %d bytes.", ctl.Actual, ctl.Level, ctl.Limit),
-			map[string]any{"limit_bytes": ctl.Limit, "actual_bytes": ctl.Actual, "ec_level": string(ctl.Level)})
+		return httpapi.ErrorDetail{Code: httpapi.CodeContentTooLarge,
+			Message: fmt.Sprintf("Content is %d bytes; the maximum at error correction level %s is %d bytes.", ctl.Actual, ctl.Level, ctl.Limit),
+			Details: map[string]any{"limit_bytes": ctl.Limit, "actual_bytes": ctl.Actual, "ec_level": string(ctl.Level)}}, true
 	case errors.As(err, &de):
-		httpapi.WriteError(w, httpapi.CodeDimensionsExceeded,
-			fmt.Sprintf("Requested size %dpx exceeds the configured maximum of %dpx.", de.Requested, de.Maximum),
-			map[string]any{"requested": de.Requested, "maximum": de.Maximum})
+		return httpapi.ErrorDetail{Code: httpapi.CodeDimensionsExceeded,
+			Message: fmt.Sprintf("Requested size %dpx exceeds the configured maximum of %dpx.", de.Requested, de.Maximum),
+			Details: map[string]any{"requested": de.Requested, "maximum": de.Maximum}}, true
 	case errors.As(err, &te):
-		httpapi.WriteError(w, httpapi.CodeRenderTimeout,
-			fmt.Sprintf("Rendering exceeded the %dms budget.", te.Timeout.Milliseconds()),
-			map[string]any{"timeout_ms": te.Timeout.Milliseconds()})
-	case errors.Is(err, context.Canceled):
-		// The client disconnected; there is nobody to answer.
-		return
-	default:
-		httpapi.Internal(w, r, err)
+		return httpapi.ErrorDetail{Code: httpapi.CodeRenderTimeout,
+			Message: fmt.Sprintf("Rendering exceeded the %dms budget.", te.Timeout.Milliseconds()),
+			Details: map[string]any{"timeout_ms": te.Timeout.Milliseconds()}}, true
 	}
+	return httpapi.ErrorDetail{}, false
 }

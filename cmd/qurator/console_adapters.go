@@ -65,6 +65,17 @@ func (c consoleCodes) Get(ctx context.Context, userID, id string) (domain.Code, 
 	return *out, nil
 }
 
+// StorageURL resolves the image's blob-store address for the console detail page (spec
+// 003, FR-208). Ownership is checked by the same Get the adapter already relies on.
+func (c consoleCodes) StorageURL(ctx context.Context, userID, id string) (string, bool, error) {
+	code, err := c.svc.Get(ctx, id, userID)
+	if err != nil {
+		return "", false, translateCodesErr(err)
+	}
+	u, ok := c.svc.StorageURL(ctx, code)
+	return u, ok, nil
+}
+
 func (c consoleCodes) UpdateDestination(ctx context.Context, userID, id, dest string, ifMatch *int64) (domain.Code, error) {
 	expected := int64(0)
 	if ifMatch != nil {

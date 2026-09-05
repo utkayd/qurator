@@ -47,6 +47,11 @@ type itBackend struct {
 	name string
 	// env returns the driver env for a fresh instance rooted at dir, or skips.
 	env func(t *testing.T, dir string) map[string]string
+	// wantStorageURL is whether code responses carry storage_url on this backend (spec
+	// 003, FR-202): only an object store can address its objects. This is the ONE
+	// observation that legitimately differs between backends, so it is asserted per
+	// backend and kept out of the compared step sequence.
+	wantStorageURL bool
 }
 
 var itBackends = []itBackend{
@@ -54,7 +59,7 @@ var itBackends = []itBackend{
 		// Defaults: ./data/qurator.db and ./data/blobs under the work dir.
 		return map[string]string{}
 	}},
-	{name: "postgres+s3", env: itPostgresS3Env},
+	{name: "postgres+s3", env: itPostgresS3Env, wantStorageURL: true},
 }
 
 // itPostgresS3Env provisions an isolated Postgres schema and a fresh S3 bucket for one
@@ -149,14 +154,13 @@ func itWithSearchPath(dsn, schema string) string {
 // observed step sequence. It only Fatals on transport failures; every HTTP outcome,
 // expected or not, is recorded so the cross-backend comparison sees the same thing a
 // user would.
-func itLifecycle(t *testing.T, p *itProc) []itStep {
+func itLifecycle(t *testing.T, p *itProc) (steps []itStep, hasStorageURL bool) {
 	t.Helper()
 	const (
 		alias = "it-matrix"
 		dest1 = "https://example.com/first"
 		dest2 = "https://example.com/second"
 	)
-	var steps []itStep
 	rec := func(name string, r itResp, detail string) itResp {
 		steps = append(steps, itStep{Name: name, Status: r.Status, Code: r.ErrCode, Detail: detail})
 		return r
@@ -175,6 +179,7 @@ func itLifecycle(t *testing.T, p *itProc) []itStep {
 	if id == "" {
 		t.Fatalf("create alias: no id in %d %s", created.Status, created.Body)
 	}
+	_, hasStorageURL = created.JSON["storage_url"]
 
 	scan := func(name string) {
 		r := s.itDo(http.MethodGet, "/r/"+alias, nil, nil)
@@ -210,7 +215,7 @@ func itLifecycle(t *testing.T, p *itProc) []itStep {
 
 	// Spec 002 / SC-105: a direct code persists its mode, offers no scan address, and
 	// refuses a destination change with the stable code — identically on every backend.
-	direct := rec("create direct", s.itDo(http.MethodPost, "/v1/codes", map[string]any{"destination": dest1, "alias": alias + "-direct", "mode": "direct"}, nil), "")
+	direct := rec("create direct", s.itDo(http.MethodPost, "/v1/codes", map[string]any{"destination": dest1, "alias": alias + "-direct", "mode": "direct", "client_ref": "it-direct"}, nil), "")
 	_, hasScanURL := direct.JSON["scan_url"]
 	steps[len(steps)-1].Detail = fmt.Sprintf("mode=%s has_scan_url=%t", str(direct.JSON, "mode"), hasScanURL)
 	directID := str(direct.JSON, "id")
@@ -220,7 +225,28 @@ func itLifecycle(t *testing.T, p *itProc) []itStep {
 			steps[len(steps)-1].Detail = "mode=" + str(det, "mode")
 		}
 	}
-	return steps
+
+	// Spec 003 / SC-203: a batch lands per item, and a client_ref already used for the
+	// same destination and mode comes back as the existing code — on every backend.
+	batch := rec("create batch", s.itDo(http.MethodPost, "/v1/codes/batch", map[string]any{"items": []map[string]any{
+		{"destination": dest1, "client_ref": "it-batch-1"},
+		{"destination": dest2, "client_ref": "it-batch-2", "mode": "direct"},
+		{"destination": dest1, "client_ref": "it-direct", "mode": "direct"}, // the direct code above
+	}}, nil), "")
+	var statuses []string
+	existingID := ""
+	if results, ok := batch.JSON["results"].([]any); ok {
+		for _, r := range results {
+			m, _ := r.(map[string]any)
+			statuses = append(statuses, str(m, "status"))
+			if str(m, "status") == "existing" {
+				c, _ := m["code"].(map[string]any)
+				existingID = str(c, "id")
+			}
+		}
+	}
+	steps[len(steps)-1].Detail = fmt.Sprintf("statuses=%s existing_is_direct=%t", strings.Join(statuses, ","), existingID != "" && existingID == directID)
+	return steps, hasStorageURL
 }
 
 // itWantLifecycle is the sequence every backend must produce. It is asserted directly
@@ -241,6 +267,7 @@ var itWantLifecycle = []itStep{
 	{"recreate alias", 409, "alias_taken", "alias=it-matrix"},
 	{"create direct", 201, "", "mode=direct has_scan_url=false"},
 	{"patch direct", 409, "direct_code_immutable", "mode=direct"},
+	{"create batch", 200, "", "statuses=created,created,existing existing_is_direct=true"},
 }
 
 func itDiffSteps(a, b []itStep) string {
@@ -278,10 +305,13 @@ func TestBackends_IdenticalLifecycle(t *testing.T) {
 				env[k] = v
 			}
 			p := itStartWithBase(t, dir, env)
-			steps := itLifecycle(t, p)
+			steps, hasStorageURL := itLifecycle(t, p)
 			observed[be.name] = steps
 			if diff := itDiffSteps(itWantLifecycle, steps); !itStepsEqual(itWantLifecycle, steps) {
 				t.Errorf("%s lifecycle differs from expectation (want | got):\n%s\nstderr:\n%s", be.name, diff, p.Stderr.String())
+			}
+			if hasStorageURL != be.wantStorageURL {
+				t.Errorf("%s: storage_url present=%t, want %t (FR-202: only an object store can derive one)", be.name, hasStorageURL, be.wantStorageURL)
 			}
 		})
 	}

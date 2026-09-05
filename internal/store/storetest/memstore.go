@@ -25,6 +25,7 @@ type memStore struct {
 	tokens map[string]*domain.APIToken // by ID
 	codes  map[string]*domain.Code     // by ID
 	byCode map[string]string           // lower(short_code) -> code ID (live and deleted rows)
+	byRef  map[refKey]string           // (user, client_ref) -> code ID (spec 003)
 
 	// reservations mirrors alias_reservations: lower(short_code) -> reservation. A
 	// reservation survives DeleteCode; ReleaseAlias marks it released rather than
@@ -35,6 +36,9 @@ type memStore struct {
 	nextSeq int64
 	rollups map[rollupKey]int64
 }
+
+// refKey mirrors the partial unique index codes_user_client_ref.
+type refKey struct{ userID, ref string }
 
 type reservation struct {
 	codeID     string
@@ -64,6 +68,7 @@ func NewMemStore() store.Store {
 		tokens:       map[string]*domain.APIToken{},
 		codes:        map[string]*domain.Code{},
 		byCode:       map[string]string{},
+		byRef:        map[refKey]string{},
 		reservations: map[string]*reservation{},
 		rollups:      map[rollupKey]int64{},
 	}
@@ -238,56 +243,99 @@ func (m *memStore) TouchTokenLastUsed(ctx context.Context, id string, at time.Ti
 // ---- codes ---------------------------------------------------------------------------
 
 func (m *memStore) CreateCode(ctx context.Context, c *domain.Code) error {
+	return m.CreateCodes(ctx, []*domain.Code{c})
+}
+
+// CreateCodes is all-or-nothing (spec 003, FR-207): every row is checked against the
+// store AND against the rows before it in the batch, and nothing is written until all
+// pass — one lock hold is the in-memory transaction.
+func (m *memStore) CreateCodes(ctx context.Context, cs []*domain.Code) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if c.ID == "" || c.ShortCode == "" || c.UserID == "" {
-		return errors.New("memstore: code id, short code and user id are required")
+	seenID := map[string]bool{}
+	seenCode := map[string]bool{}
+	seenRef := map[refKey]bool{}
+	for _, c := range cs {
+		if c.ID == "" || c.ShortCode == "" || c.UserID == "" {
+			return errors.New("memstore: code id, short code and user id are required")
+		}
+		if _, dup := m.codes[c.ID]; dup || seenID[c.ID] {
+			return fmt.Errorf("memstore: code id %q: %w", c.ID, store.ErrConflict)
+		}
+		key := strings.ToLower(c.ShortCode)
+		// One namespace: a live or deleted row, or a surviving reservation, all block it.
+		if _, taken := m.byCode[key]; taken || seenCode[key] {
+			return fmt.Errorf("memstore: short code %q: %w", c.ShortCode, store.ErrAliasTaken)
+		}
+		if r, reserved := m.reservations[key]; reserved && r.taken() {
+			return fmt.Errorf("memstore: short code %q reserved: %w", c.ShortCode, store.ErrAliasTaken)
+		}
+		if c.ClientRef != "" {
+			rk := refKey{c.UserID, c.ClientRef}
+			if _, taken := m.byRef[rk]; taken || seenRef[rk] {
+				return fmt.Errorf("memstore: client_ref %q: %w", c.ClientRef, store.ErrClientRefTaken)
+			}
+			seenRef[rk] = true
+		}
+		seenID[c.ID] = true
+		seenCode[key] = true
 	}
-	if _, dup := m.codes[c.ID]; dup {
-		return fmt.Errorf("memstore: code id %q: %w", c.ID, store.ErrConflict)
-	}
-	key := strings.ToLower(c.ShortCode)
-	// One namespace: a live or deleted row, or a surviving reservation, all block it.
-	if _, taken := m.byCode[key]; taken {
-		return fmt.Errorf("memstore: short code %q: %w", c.ShortCode, store.ErrAliasTaken)
-	}
-	if r, reserved := m.reservations[key]; reserved && r.taken() {
-		return fmt.Errorf("memstore: short code %q reserved: %w", c.ShortCode, store.ErrAliasTaken)
-	}
-
-	cp := copyCode(c)
-	cp.ShortCode = key
 	now := time.Now().UTC()
-	if cp.CreatedAt.IsZero() {
-		cp.CreatedAt = now
-	}
-	if cp.UpdatedAt.IsZero() {
-		cp.UpdatedAt = cp.CreatedAt
-	}
-	if cp.State == "" {
-		cp.State = domain.CodeActive
-	}
-	if cp.Mode == "" {
-		cp.Mode = domain.ModeDynamic
-	}
-	cp.Version = 1
-	cp.DeletedAt = nil
+	for _, c := range cs {
+		key := strings.ToLower(c.ShortCode)
+		cp := copyCode(c)
+		cp.ShortCode = key
+		if cp.CreatedAt.IsZero() {
+			cp.CreatedAt = now
+		}
+		if cp.UpdatedAt.IsZero() {
+			cp.UpdatedAt = cp.CreatedAt
+		}
+		if cp.State == "" {
+			cp.State = domain.CodeActive
+		}
+		if cp.Mode == "" {
+			cp.Mode = domain.ModeDynamic
+		}
+		if cp.Styling.ID == "" {
+			cp.Styling.ID = domain.NewID("sty")
+		}
+		cp.Version = 1
+		cp.DeletedAt = nil
 
-	m.codes[cp.ID] = cp
-	m.byCode[key] = cp.ID
-	m.reservations[key] = &reservation{codeID: cp.ID, reservedAt: now}
+		m.codes[cp.ID] = cp
+		m.byCode[key] = cp.ID
+		if cp.ClientRef != "" {
+			m.byRef[refKey{cp.UserID, cp.ClientRef}] = cp.ID
+		}
+		m.reservations[key] = &reservation{codeID: cp.ID, reservedAt: now}
 
-	// Reflect persisted values back to the caller, as a driver returning the row would.
-	c.ShortCode = cp.ShortCode
-	c.Version = cp.Version
-	c.State = cp.State
-	c.Mode = cp.Mode
-	c.CreatedAt = cp.CreatedAt
-	c.UpdatedAt = cp.UpdatedAt
+		// Reflect persisted values back to the caller, as a driver returning the row would.
+		c.ShortCode = cp.ShortCode
+		c.Version = cp.Version
+		c.State = cp.State
+		c.Mode = cp.Mode
+		c.Styling = cp.Styling
+		c.CreatedAt = cp.CreatedAt
+		c.UpdatedAt = cp.UpdatedAt
+	}
 	return nil
+}
+
+func (m *memStore) GetCodeByClientRef(ctx context.Context, userID, ref string) (*domain.Code, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	id, ok := m.byRef[refKey{userID, ref}]
+	if !ok || ref == "" {
+		return nil, fmt.Errorf("memstore: client_ref %q: %w", ref, store.ErrNotFound)
+	}
+	return copyCode(m.codes[id]), nil
 }
 
 func (m *memStore) GetCodeByShortCode(ctx context.Context, shortCode string) (*domain.Code, error) {

@@ -1,8 +1,10 @@
 package v1
 
 import (
+	"context"
 	"encoding/base64"
 	"errors"
+	"log/slog"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -32,10 +34,12 @@ func NewCodesHandler(svc *codes.Service, identity IdentityFunc) *CodesHandler {
 }
 
 const (
-	maxBodyBytes     = 64 << 10
-	defaultPageLimit = 50
-	maxPageLimit     = 200
-	maxCursorLen     = 512
+	// maxBatchBodyBytes caps POST /v1/codes/batch: codes.batch_max items, each possibly
+	// carrying a base64 logo, need far more than a single create's budget.
+	maxBatchBodyBytes = 16 << 20
+	defaultPageLimit  = 50
+	maxPageLimit      = 200
+	maxCursorLen      = 512
 )
 
 var ifMatchRe = regexp.MustCompile(`^"([0-9]+)"$`)
@@ -52,6 +56,8 @@ func (h *CodesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.list(w, r, userID)
 	case "POST /v1/codes":
 		h.create(w, r, userID)
+	case "POST /v1/codes/batch":
+		h.createBatch(w, r, userID)
 	case "GET /v1/codes/{id}":
 		h.get(w, r, userID)
 	case "PATCH /v1/codes/{id}":
@@ -82,10 +88,28 @@ type stylingRequest struct {
 }
 
 type createCodeRequest struct {
+	ClientRef   string          `json:"client_ref"`
 	Mode        string          `json:"mode"`
 	Destination string          `json:"destination"`
 	Alias       string          `json:"alias"`
 	Styling     *stylingRequest `json:"styling"`
+}
+
+type batchRequest struct {
+	Items []createCodeRequest `json:"items"`
+}
+
+// batchItemResponse is one entry of the batch response: exactly one of code / error is
+// set, matched by status (spec 003, FR-205).
+type batchItemResponse struct {
+	Index  int                  `json:"index"`
+	Status string               `json:"status"`
+	Code   *codeResponse        `json:"code,omitempty"`
+	Error  *httpapi.ErrorDetail `json:"error,omitempty"`
+}
+
+type batchResponse struct {
+	Results []batchItemResponse `json:"results"`
 }
 
 type updateDestinationRequest struct {
@@ -105,7 +129,9 @@ type stylingProfile struct {
 
 // codeResponse is the Code schema. scan_url is present for dynamic codes only: a direct
 // code's printed image encodes the destination, so offering a scan address would
-// misdescribe what scanning it does (FR-106). The key is omitted, not nulled.
+// misdescribe what scanning it does (FR-106). storage_url is present only when the blob
+// store can derive one and client_ref only when the caller supplied one (spec 003). Every
+// optional key is omitted, not nulled.
 type codeResponse struct {
 	ID          string         `json:"id"`
 	Mode        string         `json:"mode"`
@@ -116,6 +142,8 @@ type codeResponse struct {
 	State       string         `json:"state"`
 	Styling     stylingProfile `json:"styling"`
 	ImageURL    string         `json:"image_url"`
+	StorageURL  string         `json:"storage_url,omitempty"`
+	ClientRef   string         `json:"client_ref,omitempty"`
 	ScanURL     string         `json:"scan_url,omitempty"`
 	CreatedAt   time.Time      `json:"created_at"`
 	UpdatedAt   time.Time      `json:"updated_at"`
@@ -126,7 +154,7 @@ type codePage struct {
 	NextCursor *string        `json:"next_cursor"`
 }
 
-func (h *CodesHandler) toResponse(c *domain.Code) codeResponse {
+func (h *CodesHandler) toResponse(ctx context.Context, c *domain.Code) codeResponse {
 	mode := c.Mode
 	if mode == "" {
 		mode = domain.ModeDynamic
@@ -135,6 +163,7 @@ func (h *CodesHandler) toResponse(c *domain.Code) codeResponse {
 	if mode != domain.ModeDirect {
 		scanURL = h.svc.ScanURL(c.ShortCode)
 	}
+	storageURL, _ := h.svc.StorageURL(ctx, c)
 	return codeResponse{
 		ID:          c.ID,
 		Mode:        string(mode),
@@ -153,10 +182,12 @@ func (h *CodesHandler) toResponse(c *domain.Code) codeResponse {
 			ECLevelEffective: string(c.Styling.ECLevelEffective),
 			HasLogo:          c.Styling.LogoBlobKey != "",
 		},
-		ImageURL:  h.svc.ImageURL(c.ID),
-		ScanURL:   scanURL,
-		CreatedAt: c.CreatedAt.UTC(),
-		UpdatedAt: c.UpdatedAt.UTC(),
+		ImageURL:   h.svc.ImageURL(ctx, c),
+		StorageURL: storageURL,
+		ClientRef:  c.ClientRef,
+		ScanURL:    scanURL,
+		CreatedAt:  c.CreatedAt.UTC(),
+		UpdatedAt:  c.UpdatedAt.UTC(),
 	}
 }
 
@@ -237,67 +268,95 @@ func isRenderError(err error) bool {
 
 // writeServiceError maps service and store errors onto the stable catalogue.
 func writeServiceError(w http.ResponseWriter, r *http.Request, err error) {
+	if errors.Is(err, context.Canceled) {
+		return // the client disconnected; there is nobody to answer
+	}
+	d, ok := serviceErrorDetail(err)
+	if !ok {
+		httpapi.Internal(w, r, err)
+		return
+	}
+	httpapi.WriteError(w, d.Code, d.Message, d.Details)
+}
+
+// serviceErrorDetail is the single mapping from service/store errors to the error
+// envelope, shared by the whole-request path and the per-item batch path. ok is false
+// for an internal failure, which the callers log with the request context.
+func serviceErrorDetail(err error) (d httpapi.ErrorDetail, ok bool) {
 	var ve *codes.ValidationError
 	details := map[string]any(nil)
 	if errors.As(err, &ve) {
 		details = ve.Details
 	}
 	var ce *codes.ConflictError
+	var cre *codes.ClientRefConflictError
+	e := func(code httpapi.ErrorCode, msg string, det map[string]any) (httpapi.ErrorDetail, bool) {
+		return httpapi.ErrorDetail{Code: code, Message: msg, Details: det}, true
+	}
 	switch {
 	case isRenderError(err):
-		writeQRError(w, r, err)
+		return qrErrorDetail(err)
 	case errors.As(err, &ce):
-		httpapi.WriteError(w, httpapi.CodeConflict, "The code was modified by another request; re-read it and retry with its current version.",
+		return e(httpapi.CodeConflict, "The code was modified by another request; re-read it and retry with its current version.",
 			map[string]any{"expected": ce.Expected, "actual": ce.Actual})
+	case errors.As(err, &cre):
+		return e(httpapi.CodeClientRefConflict, "This client_ref was already used for a code with a different destination or mode.",
+			map[string]any{"client_ref": cre.ClientRef, "existing_id": cre.ExistingID})
+	case errors.Is(err, codes.ErrClientRefInvalid):
+		return e(httpapi.CodeInvalidRequest, "client_ref must be at most 128 characters and unique within the batch.", details)
 	case errors.Is(err, codes.ErrDirectImmutable):
-		httpapi.WriteError(w, httpapi.CodeDirectCodeImmutable,
+		return e(httpapi.CodeDirectCodeImmutable,
 			"This is a direct code: its destination is encoded in the printed image and cannot be changed, disabled, or enabled. Create a new code instead.", details)
 	case errors.Is(err, codes.ErrInvalidMode):
-		httpapi.WriteError(w, httpapi.CodeInvalidRequest, "mode must be one of dynamic, direct.", details)
+		return e(httpapi.CodeInvalidRequest, "mode must be one of dynamic, direct.", details)
 	case errors.Is(err, codes.ErrUnsupportedScheme):
-		httpapi.WriteError(w, httpapi.CodeUnsupportedScheme, "The destination uses a scheme this instance does not permit.", details)
+		return e(httpapi.CodeUnsupportedScheme, "The destination uses a scheme this instance does not permit.", details)
 	case errors.Is(err, codes.ErrSelfReferential):
-		httpapi.WriteError(w, httpapi.CodeSelfReferentialDestination, "The destination points back at this instance's scan path.", nil)
+		return e(httpapi.CodeSelfReferentialDestination, "The destination points back at this instance's scan path.", nil)
 	case errors.Is(err, codes.ErrInvalidDestination):
-		httpapi.WriteError(w, httpapi.CodeInvalidRequest, "The destination is not a valid absolute URL.", details)
+		return e(httpapi.CodeInvalidRequest, "The destination is not a valid absolute URL.", details)
 	case errors.Is(err, codes.ErrAliasReserved):
-		httpapi.WriteError(w, httpapi.CodeAliasReserved, "That alias is reserved by this instance.", details)
+		return e(httpapi.CodeAliasReserved, "That alias is reserved by this instance.", details)
 	case errors.Is(err, codes.ErrAliasInvalid):
-		httpapi.WriteError(w, httpapi.CodeAliasInvalid, "The alias does not meet the character set, length, or shape rules.", details)
+		return e(httpapi.CodeAliasInvalid, "The alias does not meet the character set, length, or shape rules.", details)
 	case errors.Is(err, store.ErrAliasTaken):
-		httpapi.WriteError(w, httpapi.CodeAliasTaken, "That alias is already in use or reserved by a deleted code.", details)
+		return e(httpapi.CodeAliasTaken, "That alias is already in use or reserved by a deleted code.", details)
+	case errors.Is(err, store.ErrClientRefTaken):
+		return e(httpapi.CodeClientRefConflict, "This client_ref was claimed by a concurrent request; re-read your codes and retry.", details)
 	case errors.Is(err, store.ErrNotFound):
-		httpapi.WriteError(w, httpapi.CodeNotFound, "No such code.", nil)
+		return e(httpapi.CodeNotFound, "No such code.", nil)
 	case errors.Is(err, store.ErrConflict):
-		httpapi.WriteError(w, httpapi.CodeConflict, "The code is in a state that does not allow this change.", nil)
-	default:
-		httpapi.Internal(w, r, err)
+		return e(httpapi.CodeConflict, "The code is in a state that does not allow this change.", nil)
 	}
+	return httpapi.ErrorDetail{}, false
 }
 
 // ---- operations ----------------------------------------------------------------------
 
-func (h *CodesHandler) create(w http.ResponseWriter, r *http.Request, userID string) {
-	var req createCodeRequest
-	if !decodeJSON(w, r, &req) {
-		return
+// inputFromRequest validates the wire shape of one CreateCodeRequest and turns it into
+// the service input. Failures are the schema-level invalid_request envelopes; everything
+// deeper is the service's business.
+func inputFromRequest(req createCodeRequest, userID string) (codes.CreateInput, *httpapi.ErrorDetail) {
+	bad := func(msg, field string) (codes.CreateInput, *httpapi.ErrorDetail) {
+		return codes.CreateInput{}, &httpapi.ErrorDetail{Code: httpapi.CodeInvalidRequest, Message: msg, Details: map[string]any{"field": field}}
 	}
 	if strings.TrimSpace(req.Destination) == "" {
-		httpapi.WriteError(w, httpapi.CodeInvalidRequest, "A destination is required.", map[string]any{"field": "destination"})
-		return
+		return bad("A destination is required.", "destination")
 	}
 	switch domain.CodeMode(req.Mode) {
 	case "", domain.ModeDynamic, domain.ModeDirect:
 	default:
-		httpapi.WriteError(w, httpapi.CodeInvalidRequest, "mode must be one of dynamic, direct.", map[string]any{"field": "mode"})
-		return
+		return bad("mode must be one of dynamic, direct.", "mode")
+	}
+	if len(req.ClientRef) > codes.MaxClientRefLen {
+		return codes.CreateInput{}, &httpapi.ErrorDetail{Code: httpapi.CodeInvalidRequest, Message: "client_ref must be at most 128 characters.",
+			Details: map[string]any{"field": "client_ref", "max_length": codes.MaxClientRefLen}}
 	}
 	styling, logo, autoRaise, field, ok := stylingFromRequest(req.Styling)
 	if !ok {
-		httpapi.WriteError(w, httpapi.CodeInvalidRequest, "A styling parameter is out of range or unsupported.", map[string]any{"field": field})
-		return
+		return bad("A styling parameter is out of range or unsupported.", field)
 	}
-	c, err := h.svc.Create(r.Context(), codes.CreateInput{
+	return codes.CreateInput{
 		UserID:        userID,
 		Mode:          domain.CodeMode(req.Mode),
 		Destination:   req.Destination,
@@ -305,13 +364,95 @@ func (h *CodesHandler) create(w http.ResponseWriter, r *http.Request, userID str
 		Styling:       styling,
 		Logo:          logo,
 		LogoAutoRaise: autoRaise,
-	})
+		ClientRef:     req.ClientRef,
+	}, nil
+}
+
+func (h *CodesHandler) create(w http.ResponseWriter, r *http.Request, userID string) {
+	var req createCodeRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	in, bad := inputFromRequest(req, userID)
+	if bad != nil {
+		httpapi.WriteError(w, bad.Code, bad.Message, bad.Details)
+		return
+	}
+	if in.ClientRef != "" {
+		// A single create with a client_ref is a batch of one: same idempotency rules
+		// (FR-206), so a retry returns the existing code with 200 instead of a duplicate.
+		res := h.svc.CreateBatch(r.Context(), userID, []codes.CreateInput{in})[0]
+		switch res.Status {
+		case codes.BatchError:
+			writeServiceError(w, r, res.Err)
+		case codes.BatchExisting:
+			w.Header().Set("Location", "/v1/codes/"+res.Code.ID)
+			httpapi.WriteJSON(w, http.StatusOK, h.toResponse(r.Context(), res.Code))
+		default:
+			w.Header().Set("Location", "/v1/codes/"+res.Code.ID)
+			httpapi.WriteJSON(w, http.StatusCreated, h.toResponse(r.Context(), res.Code))
+		}
+		return
+	}
+	c, err := h.svc.Create(r.Context(), in)
 	if err != nil {
 		writeServiceError(w, r, err)
 		return
 	}
 	w.Header().Set("Location", "/v1/codes/"+c.ID)
-	httpapi.WriteJSON(w, http.StatusCreated, h.toResponse(c))
+	httpapi.WriteJSON(w, http.StatusCreated, h.toResponse(r.Context(), c))
+}
+
+// createBatch serves POST /v1/codes/batch (spec 003, FR-205). Only the batch's shape can
+// fail the request as a whole (empty → 400, oversized → 413); every item gets its own
+// result and the response is 200 whenever the batch was processed.
+func (h *CodesHandler) createBatch(w http.ResponseWriter, r *http.Request, userID string) {
+	var req batchRequest
+	if !decodeJSONLimit(w, r, &req, maxBatchBodyBytes) {
+		return
+	}
+	if len(req.Items) == 0 {
+		httpapi.WriteError(w, httpapi.CodeInvalidRequest, "A batch needs at least one item.", map[string]any{"field": "items"})
+		return
+	}
+	if limit := h.svc.BatchMax(); len(req.Items) > limit {
+		httpapi.WriteError(w, httpapi.CodeBatchTooLarge, "The batch has more items than this instance accepts in one request.",
+			map[string]any{"limit": limit, "actual": len(req.Items)})
+		return
+	}
+	// Schema-level validation per item; items that fail never reach the service, but
+	// they keep their index so the response stays positional.
+	out := batchResponse{Results: make([]batchItemResponse, len(req.Items))}
+	inputs := make([]codes.CreateInput, 0, len(req.Items))
+	inputIdx := make([]int, 0, len(req.Items))
+	for i, item := range req.Items {
+		in, bad := inputFromRequest(item, userID)
+		if bad != nil {
+			out.Results[i] = batchItemResponse{Index: i, Status: string(codes.BatchError), Error: bad}
+			continue
+		}
+		inputs = append(inputs, in)
+		inputIdx = append(inputIdx, i)
+	}
+	if len(inputs) > 0 {
+		for _, res := range h.svc.CreateBatch(r.Context(), userID, inputs) {
+			i := inputIdx[res.Index]
+			item := batchItemResponse{Index: i, Status: string(res.Status)}
+			if res.Status == codes.BatchError {
+				d, ok := serviceErrorDetail(res.Err)
+				if !ok {
+					slog.ErrorContext(r.Context(), "batch item failed", "index", i, "err", res.Err, "route", r.Pattern)
+					d = httpapi.ErrorDetail{Code: httpapi.CodeInternal, Message: "An unexpected error occurred."}
+				}
+				item.Error = &d
+			} else {
+				c := h.toResponse(r.Context(), res.Code)
+				item.Code = &c
+			}
+			out.Results[i] = item
+		}
+	}
+	httpapi.WriteJSON(w, http.StatusOK, out)
 }
 
 func (h *CodesHandler) get(w http.ResponseWriter, r *http.Request, userID string) {
@@ -320,7 +461,7 @@ func (h *CodesHandler) get(w http.ResponseWriter, r *http.Request, userID string
 		writeServiceError(w, r, err)
 		return
 	}
-	httpapi.WriteJSON(w, http.StatusOK, h.toResponse(c))
+	httpapi.WriteJSON(w, http.StatusOK, h.toResponse(r.Context(), c))
 }
 
 func (h *CodesHandler) list(w http.ResponseWriter, r *http.Request, userID string) {
@@ -374,7 +515,7 @@ func (h *CodesHandler) list(w http.ResponseWriter, r *http.Request, userID strin
 	}
 	page := codePage{Items: make([]codeResponse, 0, len(items))}
 	for _, c := range items {
-		page.Items = append(page.Items, h.toResponse(c))
+		page.Items = append(page.Items, h.toResponse(r.Context(), c))
 	}
 	if next != "" {
 		page.NextCursor = &next
@@ -410,7 +551,7 @@ func (h *CodesHandler) patch(w http.ResponseWriter, r *http.Request, userID stri
 		writeServiceError(w, r, err)
 		return
 	}
-	httpapi.WriteJSON(w, http.StatusOK, h.toResponse(c))
+	httpapi.WriteJSON(w, http.StatusOK, h.toResponse(r.Context(), c))
 }
 
 func (h *CodesHandler) delete(w http.ResponseWriter, r *http.Request, userID string) {
@@ -427,5 +568,5 @@ func (h *CodesHandler) setState(w http.ResponseWriter, r *http.Request, userID s
 		writeServiceError(w, r, err)
 		return
 	}
-	httpapi.WriteJSON(w, http.StatusOK, h.toResponse(c))
+	httpapi.WriteJSON(w, http.StatusOK, h.toResponse(r.Context(), c))
 }
