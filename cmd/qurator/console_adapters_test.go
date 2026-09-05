@@ -17,7 +17,6 @@ import (
 	"github.com/utkayd/qurator/internal/domain"
 	"github.com/utkayd/qurator/internal/httpapi/middleware"
 	"github.com/utkayd/qurator/internal/qr"
-	"github.com/utkayd/qurator/internal/store"
 	"github.com/utkayd/qurator/internal/store/storetest"
 )
 
@@ -73,7 +72,7 @@ func TestConsoleCreatePreservesMode(t *testing.T) {
 	create("", "https://example.com/default")
 
 	got := map[string]domain.CodeMode{}
-	var s store.Store = st
+	var s = st
 	if err := s.ForEachCode(ctx, func(c *domain.Code) error { got[c.Destination] = c.Mode; return nil }); err != nil {
 		t.Fatal(err)
 	}
