@@ -6,6 +6,8 @@ import (
 	"net"
 	"net/url"
 	"strings"
+
+	"github.com/utkayd/qurator/internal/domain"
 )
 
 var (
@@ -19,6 +21,11 @@ var (
 // problems in a single run.
 func (c *Config) Validate() error {
 	var errs []error
+	if origin, err := domain.ParseScanOrigin(c.Server.BaseURL); err != nil {
+		errs = append(errs, fmt.Errorf("config: server.base_url: %w", err))
+	} else if origin != nil {
+		c.Server.BaseURL = origin.String()
+	}
 
 	// FR-040: an empty auth.signing_secret is NOT a validation error. When
 	// dev mode is off the binary generates one and persists it under

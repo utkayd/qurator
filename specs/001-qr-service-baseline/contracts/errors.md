@@ -54,6 +54,7 @@ returning it are different acts, and only one of them is safe.
 | `batch_too_large` | 413 | Batch exceeds `codes.batch_max` (spec 003) | `limit`, `actual` |
 | `client_ref_conflict` | 409 | `client_ref` already used by this user for a different destination or mode (spec 003) | `client_ref`, `existing_id` |
 | `rate_limited` | 429 | Rate limit exceeded | `retry_after_s` |
+| `scan_url_not_configured` | 503 | New dynamic creation needs a configured `QURATOR_SERVER_BASE_URL`; direct creation remains available (spec 004) | — |
 | `internal` | 500 | Unexpected failure; details are logged, not returned | — |
 
 ## Deliberate decisions

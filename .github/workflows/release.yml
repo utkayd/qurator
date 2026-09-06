@@ -2,7 +2,7 @@ name: release
 
 # Builds and publishes the multi-arch qurator image on a version tag, reproducibly
 # (research.md §6: -trimpath, empty -buildid, SOURCE_DATE_EPOCH-driven timestamps), then
-# smoke-tests it on each published platform as the nonroot user before anyone pulls it.
+# smoke-tests it on each published platform as the nonroot user.
 on:
   push:
     tags: ["v*"]
@@ -61,34 +61,8 @@ jobs:
       matrix:
         platform: [linux/amd64, linux/arm64]
     steps:
+      - uses: actions/checkout@v4
       - uses: docker/setup-qemu-action@v3
 
-      - name: Run as nonroot and curl /healthz from the host
-        run: |
-          docker run -d --name qurator-smoke --platform ${{ matrix.platform }} \
-            -p 18080:8080 "${{ env.IMAGE }}:${{ needs.build-and-push.outputs.version }}"
-
-          # distroless has no shell, so no curl/wget inside the container — the smoke
-          # check runs from the host against the published port instead.
-          for i in $(seq 1 30); do
-            if curl -fsS http://localhost:18080/healthz; then
-              echo "healthz ok on ${{ matrix.platform }}"
-              break
-            fi
-            if [ "$i" = "30" ]; then
-              echo "::error::healthz never came up on ${{ matrix.platform }}"
-              docker logs qurator-smoke
-              exit 1
-            fi
-            sleep 1
-          done
-
-          echo "container user:"
-          docker exec qurator-smoke id || true  # expected to fail: no `id` binary either
-
-          docker inspect qurator-smoke --format '{{.Config.User}}' | grep -qv '^0$' \
-            || (echo "::error::container is running as root"; exit 1)
-
-      - name: Cleanup
-        if: always()
-        run: docker rm -f qurator-smoke || true
+      - name: Verify health, nonroot QR generation and persistent storage
+        run: python3 tests/docker/smoke.py "${{ env.IMAGE }}:${{ needs.build-and-push.outputs.version }}" "${{ matrix.platform }}"

@@ -148,6 +148,21 @@ func (h *Handler) baseLayout(r *http.Request, title string) Layout {
 }
 
 func (h *Handler) render(w http.ResponseWriter, r *http.Request, status int, page, title string, content any) {
+	// Expected form failures return only the error region for HTMX. Keeping the form
+	// in place preserves input, focus, and any preview state without replaying scripts.
+	if isHTMXRequest(r) && status == http.StatusBadRequest {
+		var message string
+		switch data := content.(type) {
+		case codeNewData:
+			message = data.Error
+		case tokensData:
+			message = data.Error
+		}
+		if message != "" {
+			h.formError(w, status, message)
+			return
+		}
+	}
 	l := h.baseLayout(r, title)
 	l.Section = sectionForPage(page)
 	l.Content = content
@@ -157,6 +172,14 @@ func (h *Handler) render(w http.ResponseWriter, r *http.Request, status int, pag
 	if err := h.tmpl.render(w, page, l); err != nil {
 		httpapi.Internal(w, r, fmt.Errorf("console: rendering %s: %w", page, err))
 	}
+}
+
+func (h *Handler) formError(w http.ResponseWriter, status int, message string) {
+	w.Header().Set("X-Qurator-Form-Error", "true")
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(status)
+	_, _ = fmt.Fprintf(w, `<p class="banner banner-danger" role="alert">%s</p>`, escapeHTML(message)) //nolint:gosec // message is HTML-escaped before interpolation
 }
 
 // renderError renders a bare error banner when we do not have a good page-specific
@@ -335,6 +358,10 @@ func (h *Handler) postCodeCreate(w http.ResponseWriter, r *http.Request) {
 
 	code, err := h.deps.Codes.Create(r.Context(), user.ID, in)
 	if err != nil {
+		if !errors.Is(err, ErrValidation) {
+			httpapi.Internal(w, r, err)
+			return
+		}
 		data.Error = safeErrorMessage(err, "Could not create the code.")
 		h.render(w, r, http.StatusBadRequest, "code_new.html", "New code", data)
 		return
@@ -430,12 +457,16 @@ func (h *Handler) patchCodeDestination(w http.ResponseWriter, r *http.Request) {
 			status = http.StatusNotFound
 			msg = "Code not found."
 		}
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.WriteHeader(status)
-		_, _ = fmt.Fprintf(w, `<p class="error-banner" role="alert">%s</p>`, escapeHTML(msg)) //nolint:gosec // msg is HTML-escaped by escapeHTML before interpolation
+		if !errors.Is(err, ErrValidation) && !errors.Is(err, ErrVersionConflict) && !errors.Is(err, ErrNotFound) {
+			httpapi.Internal(w, r, err)
+			return
+		}
+		h.formError(w, status, msg)
 		return
 	}
 
+	w.Header().Set("ETag", fmt.Sprintf(`"%d"`, code.Version))
+	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	_, _ = fmt.Fprintf(w, `<p role="status">Destination updated to %s.</p>`, escapeHTML(code.Destination)) //nolint:gosec // code.Destination is HTML-escaped by escapeHTML before interpolation

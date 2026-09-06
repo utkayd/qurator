@@ -5,10 +5,10 @@
     <h1>New code</h1>
   </div>
 </div>
-{{if .Error}}<p class="banner banner-danger" role="alert">{{.Error}}</p>{{end}}
 
 <div class="split">
   <form class="stack" data-preview-form hx-post="/ui/codes" hx-target="body" hx-swap="outerHTML">
+    <div data-form-error tabindex="-1">{{if .Error}}<p class="banner banner-danger" role="alert">{{.Error}}</p>{{end}}</div>
     <section class="card">
       <h2 class="card-title">Destination</h2>
       <fieldset class="field" data-mode-field>

@@ -215,3 +215,37 @@ func TestSigninLimiterIsOptional(t *testing.T) {
 		}
 	}
 }
+
+func TestSigninLimiterSharedAcrossConsoleAndAPI(t *testing.T) {
+	verified := 0
+	ok := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		verified++
+		w.WriteHeader(http.StatusOK)
+	})
+	h := NewRouter(Handlers{Auth: ok, Console: ok, Public: ok}, Options{SigninLimiter: burstLimiter(10)})
+	paths := []string{"/v1/auth/signin", "/ui/signin"}
+	for i := range 10 {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest("POST", paths[i%2], nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("attempt %d: %d", i, rec.Code)
+		}
+	}
+	for _, path := range paths {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest("POST", path, nil))
+		if rec.Code != http.StatusTooManyRequests || rec.Header().Get("Retry-After") == "" {
+			t.Errorf("%s bypassed shared limit: %d", path, rec.Code)
+		}
+	}
+	if verified != 10 {
+		t.Errorf("password handler reached %d times, want 10", verified)
+	}
+	for _, path := range []string{"/r/abc", "/i/cod_x.png", "/ui/signin"} {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest("GET", path, nil))
+		if rec.Code != http.StatusOK {
+			t.Errorf("unrelated GET %s was throttled: %d", path, rec.Code)
+		}
+	}
+}
