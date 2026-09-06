@@ -1,53 +1,96 @@
 {{define "content"}}
-<h1>{{.Code.ShortCode}}</h1>
-{{if .Error}}<p class="error-banner" role="alert">{{.Error}}</p>{{end}}
-
-<div class="card">
-  <p>
-    <span class="badge mode-{{.Code.Mode}}">{{if eq .Code.Mode "direct"}}Direct{{else}}Dynamic{{end}}</span>
-    <span class="badge {{.Code.State}}">{{.Code.State}}</span>
-  </p>
-  <p><a href="{{.ImageURL}}">Download image</a></p>
-  {{if .StorageURL}}
-  <div class="field">
-    <label for="storage-url">Storage URL</label>
-    <input type="text" id="storage-url" data-copy-value readonly value="{{.StorageURL}}">
-    <button type="button" data-copy-target="storage-url">Copy</button>
+<div class="page-header">
+  <div>
+    <p class="breadcrumb"><a href="/ui/">Codes</a> <span aria-hidden="true">/</span> {{.Code.ShortCode}}</p>
+    <h1 class="mono title-code">{{.Code.ShortCode}}</h1>
+    <p class="pill-row">
+      <span class="pill mode-{{.Code.Mode}}">{{if eq .Code.Mode "direct"}}Direct{{else}}Dynamic{{end}}</span>
+      <span class="pill state-{{.Code.State}}"><span class="dot" aria-hidden="true"></span>{{.Code.State}}</span>
+      <span class="cell-muted">Created <time datetime="{{.Code.CreatedAt.Format "2006-01-02T15:04:05Z07:00"}}" title="{{.Code.CreatedAt.Format "2006-01-02 15:04"}}">{{relTime .Code.CreatedAt}}</time></span>
+    </p>
   </div>
-  {{end}}
-  {{if eq .Code.Mode "direct"}}
-  <p class="help">This is a direct code: the destination is printed into the image and cannot be changed.</p>
-  {{else}}
-  <p class="help">Scan address (encoded in the image, never changes): {{.Code.ScanURL}}</p>
-
-  <form class="stack" hx-patch="/ui/codes/{{.Code.ID}}" hx-target="#destination-status" hx-swap="innerHTML">
-    <input type="hidden" data-if-match="{{.Code.Version}}">
-    <div class="field">
-      <label for="destination">Destination</label>
-      <input type="url" id="destination" name="destination" required value="{{.Code.Destination}}">
-    </div>
-    <button type="submit">Save destination</button>
-    <div id="destination-status" role="status" aria-live="polite"></div>
-  </form>
-  {{end}}
-
-  <form hx-delete="/ui/codes/{{.Code.ID}}" hx-target="body" hx-swap="outerHTML">
-    <button type="submit" class="danger"
-            data-confirm-message="Deleting this code cannot be undone. Any printed copies of this QR image will stop working immediately.">
-      Delete this code
-    </button>
-  </form>
+  <a class="btn" href="{{.ImageURL}}">
+    <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2v8M4.5 6.5 8 10l3.5-3.5M3 13h10" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    Download image
+  </a>
 </div>
+{{if .Error}}<p class="banner banner-danger" role="alert">{{.Error}}</p>{{end}}
 
-<div class="card">
-  <h2>Analytics</h2>
-  {{if eq .Code.Mode "direct"}}
-  <p class="help">This is a direct code: scans open the destination without passing through qurator, so there is nothing to count here.</p>
-  {{else if .Analytics}}
-  <p>{{.Analytics.Total}} scans from {{.From}} to {{.To}}</p>
-  {{trendChart .Analytics.Series}}
-  {{else}}
-  <p class="help">No analytics available yet.</p>
-  {{end}}
+<div class="detail-grid">
+  <section class="card image-card">
+    <h2 class="card-title">Image</h2>
+    <div class="preview-tile">
+      <img src="{{.ImageURL}}" alt="QR code {{.Code.ShortCode}}" width="224" height="224">
+    </div>
+    {{if .StorageURL}}
+    <div class="field">
+      <label for="storage-url">Storage URL</label>
+      <div class="input-group">
+        <input type="text" id="storage-url" class="mono" data-copy-value readonly value="{{.StorageURL}}">
+        <button type="button" class="btn" data-copy-target="storage-url">
+          <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M10.5 5.5v-2a1 1 0 0 0-1-1h-6a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>
+          Copy
+        </button>
+      </div>
+    </div>
+    {{end}}
+  </section>
+
+  <section class="card">
+    <h2 class="card-title">Destination</h2>
+    {{if eq .Code.Mode "direct"}}
+    <p class="mono value-block" title="{{.Code.Destination}}">{{.Code.Destination}}</p>
+    <p class="callout">This is a direct code: the destination is printed into the image and cannot be changed.</p>
+    {{else}}
+    <form class="stack" hx-patch="/ui/codes/{{.Code.ID}}" hx-target="#destination-status" hx-swap="innerHTML">
+      <input type="hidden" data-if-match="{{.Code.Version}}">
+      <div class="field">
+        <label for="destination">Destination URL</label>
+        <div class="input-group">
+          <input type="url" id="destination" name="destination" required value="{{.Code.Destination}}">
+          <button type="submit" class="btn btn-primary">Save destination</button>
+        </div>
+      </div>
+      <div id="destination-status" class="status-slot" role="status" aria-live="polite"></div>
+    </form>
+    <dl class="kv">
+      <dt>Scan address</dt>
+      <dd class="mono">{{.Code.ScanURL}}</dd>
+    </dl>
+    <p class="help">Encoded in the image, never changes.</p>
+    {{end}}
+  </section>
+
+  <section class="card span-2">
+    <div class="card-head">
+      <h2 class="card-title">Analytics</h2>
+      {{if and (ne .Code.Mode "direct") .Analytics}}
+      <span class="cell-muted">{{.From}} → {{.To}}</span>
+      {{end}}
+    </div>
+    {{if eq .Code.Mode "direct"}}
+    <p class="callout">This is a direct code: scans open the destination without passing through qurator, so there is nothing to count here.</p>
+    {{else if .Analytics}}
+    <p class="stat"><span class="stat-value">{{.Analytics.Total}}</span> <span class="stat-label">scans from {{.From}} to {{.To}}</span></p>
+    {{trendChart .Analytics.Series}}
+    {{else}}
+    <p class="help">No analytics available yet.</p>
+    {{end}}
+  </section>
+
+  <section class="card card-danger span-2">
+    <div class="card-head">
+      <div>
+        <h2 class="card-title">Danger zone</h2>
+        <p class="help">Deleting a code is permanent. Any printed copies of its QR image stop working immediately.</p>
+      </div>
+      <form hx-delete="/ui/codes/{{.Code.ID}}" hx-target="body" hx-swap="outerHTML">
+        <button type="submit" class="btn btn-danger"
+                data-confirm-message="Deleting this code cannot be undone. Any printed copies of this QR image will stop working immediately.">
+          Delete this code
+        </button>
+      </form>
+    </div>
+  </section>
 </div>
 {{end}}

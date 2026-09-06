@@ -7,6 +7,8 @@
 //   3. A custom (non-native, non-hx-confirm) confirmation dialog for destructive
 //      htmx actions, driven by the htmx:confirm event.
 //   4. A show-once API token secret: copy to clipboard, then remove from the DOM.
+//   5. Small presentation helpers: a toast for copy confirmations and the hex readout
+//      next to each colour swatch. Both are pure class/text toggles — no inline styles.
 (function () {
   "use strict";
 
@@ -94,13 +96,24 @@
       return params;
     }
 
+    var tile = document.querySelector("[data-preview-tile]");
+    function showEmpty(empty) {
+      if (tile) tile.classList.toggle("is-empty", empty);
+      img.hidden = empty;
+    }
+
     function runPreview() {
       var params = buildQuery();
-      if (!params.get("content")) return;
+      if (!params.get("content")) {
+        showEmpty(true);
+        setStatus("");
+        return;
+      }
       var key = params.toString();
       var cached = previewCache.get(key);
       if (cached) {
         img.src = cached;
+        showEmpty(false);
         setStatus("");
         return;
       }
@@ -131,6 +144,7 @@
           });
         })
         .then(function (dataURL) {
+          showEmpty(false);
           previewCache.set(key, dataURL);
           img.src = dataURL;
           setStatus("");
@@ -186,6 +200,26 @@
   }
 
   // ---------------------------------------------------------------------------
+  // Toast
+  // ---------------------------------------------------------------------------
+  //
+  // One [data-toast] element lives in the layout with aria-live="polite"; showing a
+  // message is a text swap plus a class toggle so the transition is CSS-only.
+
+  var toastTimer = null;
+
+  function showToast(message) {
+    var toast = document.querySelector("[data-toast]");
+    if (!toast) return;
+    toast.textContent = message;
+    toast.classList.add("is-visible");
+    if (toastTimer) window.clearTimeout(toastTimer);
+    toastTimer = window.setTimeout(function () {
+      toast.classList.remove("is-visible");
+    }, 2200);
+  }
+
+  // ---------------------------------------------------------------------------
   // Clipboard copy helper
   // ---------------------------------------------------------------------------
   //
@@ -223,7 +257,9 @@
           container.parentNode.removeChild(container);
         }
         button.textContent = "Copied — hidden";
+        button.classList.add("is-copied");
         button.disabled = true;
+        showToast("Secret copied to clipboard");
       });
     });
   }
@@ -243,25 +279,72 @@
       var targetID = button.getAttribute("data-copy-target");
       var target = targetID ? document.getElementById(targetID) : null;
       if (!target) return;
-      var originalLabel = button.textContent;
+      var originalLabel = button.innerHTML;
 
       button.addEventListener("click", function () {
         var value = "value" in target ? target.value : target.textContent;
         copyToClipboard(value || "", function () {
           button.textContent = "Copied";
+          button.classList.add("is-copied");
+          showToast("Copied to clipboard");
           window.setTimeout(function () {
-            button.textContent = originalLabel;
+            button.innerHTML = originalLabel;
+            button.classList.remove("is-copied");
           }, 2000);
         });
       });
     });
   }
 
+  // ---------------------------------------------------------------------------
+  // Colour swatch hex readout
+  // ---------------------------------------------------------------------------
+  //
+  // Each <input type="color"> has a sibling <output data-swatch-value="<input id>">
+  // that mirrors its current hex value, so the chosen colour is readable as text.
+
+  function initSwatches() {
+    var outputs = document.querySelectorAll("[data-swatch-value]");
+    outputs.forEach(function (output) {
+      var input = document.getElementById(output.getAttribute("data-swatch-value"));
+      if (!input) return;
+      var sync = function () {
+        output.textContent = input.value;
+      };
+      input.addEventListener("input", sync);
+      input.addEventListener("change", sync);
+      sync();
+    });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Clickable table rows
+  // ---------------------------------------------------------------------------
+  //
+  // A tr.row-link navigates to its .row-anchor's href when clicked anywhere that is
+  // not itself a link or button, so the whole row is a target while the real anchor
+  // stays the single keyboard-focusable control.
+
+  function initRowLinks() {
+    document.querySelectorAll("tr.row-link").forEach(function (row) {
+      var anchor = row.querySelector("a.row-anchor");
+      if (!anchor) return;
+      row.addEventListener("click", function (evt) {
+        if (evt.defaultPrevented) return;
+        if (evt.target.closest("a, button, input, select, textarea, form")) return;
+        if (window.getSelection && String(window.getSelection())) return;
+        window.location.href = anchor.href;
+      });
+    });
+  }
+
   document.addEventListener("DOMContentLoaded", function () {
     configureHtmx();
+    initRowLinks();
     initPreview();
     initConfirm();
     initTokenSecret();
     initCopyButtons();
+    initSwatches();
   });
 })();

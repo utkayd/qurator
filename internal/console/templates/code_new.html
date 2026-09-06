@@ -1,78 +1,131 @@
 {{define "content"}}
-<h1>New code</h1>
-{{if .Error}}<p class="error-banner" role="alert">{{.Error}}</p>{{end}}
-<div class="two-col">
-  <form class="stack" data-preview-form hx-post="/ui/codes" hx-target="body" hx-swap="outerHTML">
-    <div class="field" data-mode-field>
-      <label>Mode</label>
-      <label class="radio-option">
-        <input type="radio" name="mode" value="dynamic" {{if ne .Mode "direct"}}checked{{end}}>
-        Dynamic (recommended)
-      </label>
-      <p class="help">Scans pass through this instance, so you can change the destination later and see scan analytics.</p>
-      <label class="radio-option">
-        <input type="radio" name="mode" value="direct" {{if eq .Mode "direct"}}checked{{end}}>
-        Direct
-      </label>
-      <p class="help">The destination is printed into the image and cannot be changed later. Scans go straight to the destination and are not counted.</p>
-    </div>
-    <div class="field">
-      <label for="destination">Destination URL</label>
-      <input type="url" id="destination" name="destination" required value="{{.Destination}}"
-             placeholder="example.com/spring-sale (https://)">
-    </div>
-    <div class="field">
-      <label for="alias">Custom alias (optional)</label>
-      <input type="text" id="alias" name="alias" value="{{.Alias}}" placeholder="spring-sale">
-      <span class="help">Leave blank for a generated short code. Aliases cannot be changed later.</span>
-    </div>
-    <div class="field">
-      <label for="format">Image format</label>
-      <select id="format" name="format">
-        <option value="png" {{if eq .Format "png"}}selected{{end}}>PNG</option>
-        <option value="svg" {{if eq .Format "svg"}}selected{{end}}>SVG</option>
-      </select>
-    </div>
-    <div class="field">
-      <label for="fg_color">Foreground colour</label>
-      <input type="color" id="fg_color" name="fg_color" value="{{.FgColor}}">
-    </div>
-    <div class="field">
-      <label for="bg_color">Background colour</label>
-      <input type="color" id="bg_color" name="bg_color" value="{{.BgColor}}">
-    </div>
-    <div class="field">
-      <label for="module_shape">Module shape</label>
-      <select id="module_shape" name="module_shape">
-        <option value="square" {{if eq .ModuleShape "square"}}selected{{end}}>Square</option>
-        <option value="dot" {{if eq .ModuleShape "dot"}}selected{{end}}>Dot</option>
-        <option value="rounded" {{if eq .ModuleShape "rounded"}}selected{{end}}>Rounded</option>
-      </select>
-    </div>
-    <div class="field">
-      <label for="margin_modules">Margin (modules)</label>
-      <input type="number" id="margin_modules" name="margin_modules" min="4" max="64" value="{{.MarginModules}}">
-    </div>
-    <div class="field">
-      <label for="size_px">Size (pixels)</label>
-      <input type="number" id="size_px" name="size_px" min="64" max="4096" value="{{.SizePx}}">
-    </div>
-    <div class="field">
-      <label for="ec_level">Error correction level</label>
-      <select id="ec_level" name="ec_level">
-        <option value="L" {{if eq .ECLevel "L"}}selected{{end}}>L</option>
-        <option value="M" {{if eq .ECLevel "M"}}selected{{end}}>M</option>
-        <option value="Q" {{if eq .ECLevel "Q"}}selected{{end}}>Q</option>
-        <option value="H" {{if eq .ECLevel "H"}}selected{{end}}>H</option>
-      </select>
-    </div>
-    <button type="submit" class="primary">Create code</button>
-  </form>
-  <div class="preview">
-    <h2>Live preview</h2>
-    <img data-preview-image src="" alt="Live QR code preview" width="256" height="256">
-    <p data-preview-status class="help" aria-live="polite"></p>
-    <p class="help">{{if eq .Mode "direct"}}Direct mode: the printed code encodes the destination itself.{{else}}The preview renders with today's destination text; the printed code always encodes this instance's own scan address so it keeps working even after the destination changes.{{end}}</p>
+<div class="page-header">
+  <div>
+    <p class="breadcrumb"><a href="/ui/">Codes</a> <span aria-hidden="true">/</span> New</p>
+    <h1>New code</h1>
   </div>
+</div>
+{{if .Error}}<p class="banner banner-danger" role="alert">{{.Error}}</p>{{end}}
+
+<div class="split">
+  <form class="stack" data-preview-form hx-post="/ui/codes" hx-target="body" hx-swap="outerHTML">
+    <section class="card">
+      <h2 class="card-title">Destination</h2>
+      <fieldset class="field" data-mode-field>
+        <legend>Mode</legend>
+        <div class="choice-group">
+          <label class="choice">
+            <input type="radio" name="mode" value="dynamic" {{if ne .Mode "direct"}}checked{{end}}>
+            <span class="choice-body">
+              <span class="choice-title">Dynamic <span class="pill mode-dynamic">Recommended</span></span>
+              <span class="choice-help">Scans pass through this instance, so you can change the destination later and see scan analytics.</span>
+            </span>
+          </label>
+          <label class="choice">
+            <input type="radio" name="mode" value="direct" {{if eq .Mode "direct"}}checked{{end}}>
+            <span class="choice-body">
+              <span class="choice-title">Direct</span>
+              <span class="choice-help">The destination is printed into the image and cannot be changed later. Scans go straight to the destination and are not counted.</span>
+            </span>
+          </label>
+        </div>
+      </fieldset>
+      <div class="field">
+        <label for="destination">Destination URL</label>
+        <input type="url" id="destination" name="destination" required value="{{.Destination}}"
+               placeholder="example.com/spring-sale (https://)">
+      </div>
+      <div class="field">
+        <label for="alias">Custom alias <span class="optional">optional</span></label>
+        <input type="text" id="alias" name="alias" value="{{.Alias}}" placeholder="spring-sale">
+        <span class="help">Leave blank for a generated short code. Aliases cannot be changed later.</span>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2 class="card-title">Appearance</h2>
+      <div class="field-row">
+        <div class="field">
+          <label for="fg_color">Foreground colour</label>
+          <div class="swatch-field">
+            <input type="color" id="fg_color" name="fg_color" value="{{.FgColor}}" class="swatch">
+            <output for="fg_color" class="swatch-value mono" data-swatch-value="fg_color">{{.FgColor}}</output>
+          </div>
+        </div>
+        <div class="field">
+          <label for="bg_color">Background colour</label>
+          <div class="swatch-field">
+            <input type="color" id="bg_color" name="bg_color" value="{{.BgColor}}" class="swatch">
+            <output for="bg_color" class="swatch-value mono" data-swatch-value="bg_color">{{.BgColor}}</output>
+          </div>
+        </div>
+      </div>
+      <fieldset class="field">
+        <legend>Module shape</legend>
+        <div class="segmented">
+          <label class="segment">
+            <input type="radio" name="module_shape" value="square" {{if eq .ModuleShape "square"}}checked{{end}}>
+            <span class="segment-body"><svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="3" width="10" height="10" fill="currentColor"/></svg>Square</span>
+          </label>
+          <label class="segment">
+            <input type="radio" name="module_shape" value="dot" {{if eq .ModuleShape "dot"}}checked{{end}}>
+            <span class="segment-body"><svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="5" fill="currentColor"/></svg>Dot</span>
+          </label>
+          <label class="segment">
+            <input type="radio" name="module_shape" value="rounded" {{if eq .ModuleShape "rounded"}}checked{{end}}>
+            <span class="segment-body"><svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="3" width="10" height="10" rx="3" fill="currentColor"/></svg>Rounded</span>
+          </label>
+        </div>
+      </fieldset>
+      <div class="field-row">
+        <div class="field">
+          <label for="format">Image format</label>
+          <select id="format" name="format">
+            <option value="png" {{if eq .Format "png"}}selected{{end}}>PNG</option>
+            <option value="svg" {{if eq .Format "svg"}}selected{{end}}>SVG</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="ec_level">Error correction</label>
+          <select id="ec_level" name="ec_level">
+            <option value="L" {{if eq .ECLevel "L"}}selected{{end}}>L — 7%</option>
+            <option value="M" {{if eq .ECLevel "M"}}selected{{end}}>M — 15%</option>
+            <option value="Q" {{if eq .ECLevel "Q"}}selected{{end}}>Q — 25%</option>
+            <option value="H" {{if eq .ECLevel "H"}}selected{{end}}>H — 30%</option>
+          </select>
+        </div>
+      </div>
+      <div class="field-row">
+        <div class="field">
+          <label for="size_px">Size (pixels)</label>
+          <input type="number" id="size_px" name="size_px" min="64" max="4096" value="{{.SizePx}}">
+        </div>
+        <div class="field">
+          <label for="margin_modules">Margin (modules)</label>
+          <input type="number" id="margin_modules" name="margin_modules" min="4" max="64" value="{{.MarginModules}}">
+        </div>
+      </div>
+    </section>
+
+    <div class="form-actions">
+      <a class="btn btn-ghost" href="/ui/">Cancel</a>
+      <button type="submit" class="btn btn-primary">Create code</button>
+    </div>
+  </form>
+
+  <aside class="preview-col">
+    <div class="card preview">
+      <h2 class="card-title">Live preview</h2>
+      <div class="preview-tile is-empty" data-preview-tile>
+        <img data-preview-image alt="Live QR code preview" width="256" height="256" hidden>
+        <div class="preview-empty" data-preview-empty aria-hidden="true">
+          <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M14 14h3v3h-3zM18 18h3v3h-3zM18 14h3M14 18v3"/></svg>
+          <p>Enter a destination to preview</p>
+        </div>
+      </div>
+      <p data-preview-status class="help preview-status" aria-live="polite"></p>
+      <p class="callout">{{if eq .Mode "direct"}}Direct mode: the printed code encodes the destination itself.{{else}}The preview renders with today's destination text; the printed code always encodes this instance's own scan address so it keeps working even after the destination changes.{{end}}</p>
+    </div>
+  </aside>
 </div>
 {{end}}

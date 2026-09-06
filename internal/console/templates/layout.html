@@ -3,36 +3,51 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
   <title>{{.Title}} — qurator</title>
   <link rel="stylesheet" href="{{.AppCSSURL}}" nonce="{{.Nonce}}">
   <meta name="htmx-config" content="{&quot;allowEval&quot;:false,&quot;selfRequestsOnly&quot;:true,&quot;allowScriptTags&quot;:false}">
 </head>
-<body>
+<body class="{{if .User}}app{{else}}auth{{end}}">
   <a class="skip-link" href="#main">Skip to content</a>
-  <header class="site">
-    <strong>qurator</strong>
-    {{if .User}}
-    <nav aria-label="Primary">
-      <a href="/ui/">Codes</a>
-      <a href="/ui/codes/new">New code</a>
-      <a href="/ui/tokens">Tokens</a>
-      <form method="post" action="/ui/signout" hx-post="/ui/signout" hx-target="body" hx-swap="outerHTML" style="display:inline">
-        <button type="submit">Sign out ({{.User.Email}})</button>
-      </form>
-    </nav>
-    {{end}}
+  {{if .User}}
+  <header class="topbar">
+    <div class="topbar-inner">
+      <a class="wordmark" href="/ui/">qurator</a>
+      <nav class="primary-nav" aria-label="Primary">
+        <a href="/ui/" {{if eq .Section "codes"}}aria-current="page"{{end}}>Codes</a>
+        <a href="/ui/tokens" {{if eq .Section "tokens"}}aria-current="page"{{end}}>Tokens</a>
+      </nav>
+      <div class="user-chip">
+        <span class="avatar" aria-hidden="true">{{.User.Initial}}</span>
+        <span class="user-email" title="{{.User.Email}}">{{.User.Email}}</span>
+        <form class="inline-form" method="post" action="/ui/signout" hx-post="/ui/signout" hx-target="body" hx-swap="outerHTML">
+          <button type="submit" class="btn btn-ghost btn-sm" title="Sign out ({{.User.Email}})">
+            <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M6 2H3.5A1.5 1.5 0 0 0 2 3.5v9A1.5 1.5 0 0 0 3.5 14H6M10.5 11l3-3-3-3M13.5 8H6" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            Sign out
+          </button>
+        </form>
+      </div>
+    </div>
   </header>
-  <main id="main">
+  {{end}}
+  <main id="main" class="container">
     {{template "content" .Content}}
   </main>
 
-  <dialog data-confirm-dialog>
-    <p data-confirm-text></p>
+  <dialog class="modal" data-confirm-dialog aria-labelledby="confirm-title">
+    <div class="modal-icon" aria-hidden="true">
+      <svg class="icon" viewBox="0 0 16 16"><path d="M8 5.5v3M8 11h.01M7.1 2.6 1.6 12.2A1 1 0 0 0 2.5 13.7h11a1 1 0 0 0 .9-1.5L8.9 2.6a1 1 0 0 0-1.8 0Z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </div>
+    <h2 id="confirm-title" class="modal-title">Are you sure?</h2>
+    <p class="modal-text" data-confirm-text></p>
     <form method="dialog" class="dialog-actions">
-      <button value="cancel">Cancel</button>
-      <button value="confirm" class="danger" autofocus>Confirm</button>
+      <button value="cancel" class="btn">Cancel</button>
+      <button value="confirm" class="btn btn-danger" autofocus>Confirm</button>
     </form>
   </dialog>
+
+  <div class="toast" data-toast role="status" aria-live="polite"></div>
 
   <script src="{{.HtmxURL}}" nonce="{{.Nonce}}"></script>
   <script src="{{.AppJSURL}}" nonce="{{.Nonce}}"></script>

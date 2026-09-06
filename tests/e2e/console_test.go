@@ -453,7 +453,7 @@ func TestConsoleLifecycle(t *testing.T) {
 	}
 
 	// Analytics chart is present as inline SVG.
-	if !strings.Contains(detailBody, "<svg") {
+	if !strings.Contains(detailBody, `<svg class="chart"`) {
 		t.Fatalf("code detail page has no inline SVG analytics chart:\n%s", detailBody)
 	}
 
@@ -584,7 +584,7 @@ func TestConsoleDirectAndDynamicModes(t *testing.T) {
 	if !strings.Contains(directBody, "there is nothing to count here") {
 		t.Fatalf("direct code detail page missing the direct-code explanation:\n%s", directBody)
 	}
-	if strings.Contains(directBody, "<svg") {
+	if strings.Contains(directBody, `<svg class="chart"`) {
 		t.Fatalf("direct code detail page must not render an analytics chart:\n%s", directBody)
 	}
 	// Download and delete stay available.
@@ -613,7 +613,7 @@ func TestConsoleDirectAndDynamicModes(t *testing.T) {
 	if !strings.Contains(dynamicBody, `id="destination"`) {
 		t.Fatalf("dynamic code detail page must show the destination edit form:\n%s", dynamicBody)
 	}
-	if !strings.Contains(dynamicBody, "<svg") {
+	if !strings.Contains(dynamicBody, `<svg class="chart"`) {
 		t.Fatalf("dynamic code detail page must render an inline SVG analytics chart:\n%s", dynamicBody)
 	}
 
