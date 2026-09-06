@@ -96,6 +96,8 @@ func run(ctx context.Context, args []string, lookupEnv func(string) (string, boo
 			return runExport(ctx, args[1:], lookupEnv, stdout)
 		case "import":
 			return runImport(ctx, args[1:], lookupEnv, stdout)
+		case "healthcheck":
+			return runHealthcheck(args[1:], lookupEnv, stdout)
 		}
 	}
 

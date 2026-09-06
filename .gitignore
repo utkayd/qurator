@@ -24,3 +24,9 @@ coverage.*
 
 # OS
 .DS_Store
+
+# Browser development tests (not runtime assets)
+node_modules/
+tests/browser/.bin/
+tests/browser/test-results/
+tests/browser/playwright-report/

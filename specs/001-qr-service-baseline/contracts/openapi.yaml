@@ -423,7 +423,7 @@ paths:
     post:
       operationId: createCode
       tags: [codes]
-      summary: Create a dynamic code
+      summary: Create a dynamic or direct code
       description: |
         Creates a persisted code with a mutable destination (FR-007). If `alias` is omitted, a
         system-generated, unguessable, collision-resistant short code is assigned (FR-013). If
@@ -432,10 +432,13 @@ paths:
         a deleted code (unless an administrator has explicitly released it). Aliases are
         **immutable** once created.
 
-        The response's `image_url` points at the code's persisted rendered image; the QR's
-        *encoded* payload is always this instance's own scan address for the code
-        (`/r/{short_code}`), never the destination directly — that indirection is what lets
-        the destination change later without reprinting anything.
+        The response's `image_url` addresses the persisted image according to `images.url_mode`.
+        Dynamic codes encode the configured absolute `server.base_url` plus `/r/{short_code}`;
+        direct codes encode the destination itself (spec 002).
+        New dynamic creation requires a configured scan origin; an empty origin returns
+        `503 scan_url_not_configured` before rendering or persistence (spec 004).
+        Direct creation and idempotent replays of existing codes remain available.
+        Request Host and forwarded headers are never used as the printed origin.
       parameters:
         - $ref: '#/components/parameters/CsrfHeader'
       requestBody:
@@ -455,6 +458,12 @@ paths:
                 size_px: 1024
                 ec_level: Q
       responses:
+        '200':
+          description: Existing code returned for an idempotent client_ref replay.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Code'
         '201':
           description: The code was created.
           content:
@@ -469,6 +478,16 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '409':
           $ref: '#/components/responses/Conflict'
+        '503':
+          description: Dynamic creation is unavailable until the operator configures server.base_url.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error:
+                  code: scan_url_not_configured
+                  message: Dynamic codes need a public scan address. Ask the operator to configure QURATOR_SERVER_BASE_URL, or create a direct code.
         '5XX':
           description: Unexpected server error.
           content:
@@ -686,7 +705,9 @@ paths:
         created code, the existing code when the item's `client_ref` was already used
         with the same destination and mode (`status: existing`), or an error envelope
         for that item alone. The HTTP status is `200` whenever the batch was processed;
-        only a malformed or oversized batch fails as a whole. Metadata for all created
+        only a malformed or oversized batch fails as a whole. With an empty scan origin,
+        new dynamic items report `scan_url_not_configured`; direct and existing items
+        can still succeed (spec 004). Metadata for all created
         items is written in one transaction; images render in parallel (spec 003).
       parameters:
         - $ref: '#/components/parameters/CsrfHeader'
@@ -849,6 +870,8 @@ paths:
           $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimited'
         '5XX':
           description: Unexpected server error.
           content:
@@ -1370,6 +1393,7 @@ components:
         - token_revoked
         - conflict
         - rate_limited
+        - scan_url_not_configured
         - internal
 
     ErrorDetail:

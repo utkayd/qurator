@@ -34,6 +34,7 @@ const (
 	CodeBatchTooLarge              ErrorCode = "batch_too_large"       // spec 003
 	CodeClientRefConflict          ErrorCode = "client_ref_conflict"   // spec 003
 	CodeRateLimited                ErrorCode = "rate_limited"
+	CodeScanURLNotConfigured       ErrorCode = "scan_url_not_configured"
 	CodeInternal                   ErrorCode = "internal"
 	CodeNotImplemented             ErrorCode = "not_implemented" // foundation stubs only
 )
@@ -55,6 +56,8 @@ func (c ErrorCode) Status() int {
 		return http.StatusForbidden
 	case CodeRateLimited:
 		return http.StatusTooManyRequests
+	case CodeScanURLNotConfigured:
+		return http.StatusServiceUnavailable
 	case CodeInternal:
 		return http.StatusInternalServerError
 	case CodeNotImplemented:

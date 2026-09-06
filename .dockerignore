@@ -1,0 +1,13 @@
+.git
+bin/
+data/
+dist/
+*.db
+*.db-*
+.env*
+specs/
+.specify/
+.claude/
+.github/
+deploy/
+README.md

@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"io"
 	"net"
 	"net/http"
 	"strconv"
@@ -85,6 +86,14 @@ func (rl *RateLimiter) Middleware(next http.Handler) http.Handler {
 		if !ok {
 			secs := int(retry.Seconds())
 			w.Header().Set("Retry-After", strconv.Itoa(secs))
+			if r.URL.Path == "/ui/signin" {
+				w.Header().Set("Content-Type", "text/html; charset=utf-8")
+				w.Header().Set("Cache-Control", "no-store")
+				w.Header().Set("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'; base-uri 'none'")
+				w.WriteHeader(http.StatusTooManyRequests)
+				_, _ = io.WriteString(w, `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Sign-in limit — qurator</title></head><body><p role="alert">Too many sign-in attempts. Wait before trying again.</p><a href="/ui/signin">Back to sign in</a></body></html>`)
+				return
+			}
 			httpapi.WriteError(w, httpapi.CodeRateLimited, "Too many requests.", map[string]any{"retry_after_s": secs})
 			return
 		}

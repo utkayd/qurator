@@ -23,16 +23,83 @@
     htmx.config.selfRequestsOnly = true;
     htmx.config.allowScriptTags = false;
 
-    document.body.addEventListener("htmx:configRequest", function (evt) {
+    document.addEventListener("htmx:configRequest", function (evt) {
       evt.detail.headers[CSRF_HEADER] = CSRF_VALUE;
 
       // Optimistic-concurrency: a destination-edit form carries the version it was
       // rendered with in a data attribute; forward it as If-Match so a concurrent edit
       // loses the race with a 409 rather than silently clobbering.
-      var versioned = evt.detail.elt.querySelector("[data-if-match]");
+      var form = evt.detail.elt.closest("form");
+      var versioned = form && form.querySelector("[data-if-match]");
       if (versioned) {
         evt.detail.headers["If-Match"] = '"' + versioned.getAttribute("data-if-match") + '"';
       }
+    });
+  }
+
+  function errorRegion(elt) {
+    var form = elt && elt.closest("form");
+    var region = form && form.querySelector("[data-form-error]");
+    if (region) return region;
+    region = document.querySelector("[data-page-error]");
+    if (!region) {
+      region = document.createElement("div");
+      region.setAttribute("data-page-error", "");
+      region.tabIndex = -1;
+      (document.querySelector("main") || document.body).prepend(region);
+    }
+    return region;
+  }
+
+  function showRequestError(elt, message) {
+    var region = errorRegion(elt);
+    var banner = document.createElement("p");
+    banner.className = "banner banner-danger";
+    banner.setAttribute("role", "alert");
+    banner.textContent = message;
+    region.replaceChildren(banner);
+    region.focus();
+  }
+
+  function configureResponses() {
+    document.addEventListener("htmx:beforeSwap", function (evt) {
+      var detail = evt.detail;
+      var xhr = detail.xhr;
+      if (xhr.status < 400) return;
+      if (xhr.getResponseHeader("X-Qurator-Form-Error") === "true" &&
+          xhr.status < 500 &&
+          (xhr.getResponseHeader("Content-Type") || "").indexOf("text/html") === 0) {
+        detail.target = errorRegion(detail.requestConfig.elt);
+        detail.swapOverride = "innerHTML";
+        detail.shouldSwap = true;
+        detail.isError = false;
+      } else {
+        detail.shouldSwap = false;
+        showRequestError(detail.requestConfig.elt,
+          xhr.status === 429 ? "Too many requests. Wait before trying again." :
+          "Could not complete the request. Please try again.");
+      }
+    });
+    document.addEventListener("htmx:afterSwap", function (evt) {
+      var region = evt.detail.target;
+      if (region && region.hasAttribute("data-form-error") && region.querySelector('[role="alert"]')) {
+        region.focus();
+      }
+    });
+    document.addEventListener("htmx:afterRequest", function (evt) {
+      var xhr = evt.detail.xhr;
+      if (xhr.status < 200 || xhr.status >= 300) return;
+      var form = evt.detail.elt.closest("form");
+      var versioned = form && form.querySelector("[data-if-match]");
+      var etag = xhr.getResponseHeader("ETag");
+      if (versioned && etag && /^"[0-9]+"$/.test(etag)) {
+        versioned.setAttribute("data-if-match", etag.slice(1, -1));
+      }
+    });
+    ["htmx:sendError", "htmx:timeout"].forEach(function (name) {
+      document.addEventListener(name, function (evt) {
+        showRequestError(evt.detail.elt, "Could not reach the server. Please try again.");
+      });
     });
   }
 
@@ -41,8 +108,8 @@
   // ---------------------------------------------------------------------------
   //
   // The preview calls the exact same ephemeral renderer the API exposes at
-  // GET /v1/qr, so what the user sees while adjusting controls is guaranteed to match
-  // the image a save would produce (research.md §5). Requests are debounced 150ms,
+  // GET /v1/qr. A dynamic draft approximates the final symbol using the destination;
+  // its eventual scan URL is chosen at creation. Requests are debounced 150ms,
   // in-flight stale requests are aborted, and identical parameter sets are served from
   // an in-memory memo cache.
 
@@ -55,7 +122,8 @@
     var form = document.querySelector("[data-preview-form]");
     var img = document.querySelector("[data-preview-image]");
     var status = document.querySelector("[data-preview-status]");
-    if (!form || !img) return;
+    if (!form || !img || form.dataset.previewReady) return;
+    form.dataset.previewReady = "true";
 
     var fields = form.querySelectorAll("input, select, textarea");
     fields.forEach(function (field) {
@@ -174,8 +242,10 @@
   // "Are you sure?".
 
   function initConfirm() {
-    document.body.addEventListener("htmx:confirm", function (evt) {
-      var message = evt.detail.elt.getAttribute("data-confirm-message");
+    document.addEventListener("htmx:confirm", function (evt) {
+      var source = evt.detail.elt.closest("[data-confirm-message]") ||
+        evt.detail.elt.querySelector("[data-confirm-message]");
+      var message = source && source.getAttribute("data-confirm-message");
       if (!message) return; // element opted out of confirmation entirely
       evt.preventDefault();
 
@@ -195,6 +265,7 @@
         }
       };
       dialog.addEventListener("close", onClose);
+      dialog.returnValue = "cancel";
       dialog.showModal();
     });
   }
@@ -223,16 +294,20 @@
   // Clipboard copy helper
   // ---------------------------------------------------------------------------
   //
-  // Shared by the show-once token secret and the code detail page's storage URL. Falls
-  // back to just running the completion callback when the Clipboard API is unavailable
-  // (e.g. an insecure context), same as before this was factored out.
+  // Shared by token secrets and storage URLs. Failure keeps the value visible and
+  // offers manual copying; only a confirmed write invokes the success callback.
 
   function copyToClipboard(value, done) {
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-      navigator.clipboard.writeText(value).then(done, done);
-    } else {
-      done();
+    function failed() {
+      showToast("Could not copy. Select the text and copy it manually.");
     }
+    if (!navigator.clipboard || !navigator.clipboard.writeText) {
+      failed();
+      return;
+    }
+    Promise.resolve().then(function () {
+      return navigator.clipboard.writeText(value);
+    }).then(done, failed);
   }
 
   // ---------------------------------------------------------------------------
@@ -245,7 +320,8 @@
 
   function initTokenSecret() {
     var button = document.querySelector("[data-copy-secret]");
-    if (!button) return;
+    if (!button || button.dataset.copyReady) return;
+    button.dataset.copyReady = "true";
     var secretEl = document.querySelector("[data-secret-value]");
     if (!secretEl) return;
 
@@ -276,6 +352,8 @@
   function initCopyButtons() {
     var buttons = document.querySelectorAll("[data-copy-target]");
     buttons.forEach(function (button) {
+      if (button.dataset.copyReady) return;
+      button.dataset.copyReady = "true";
       var targetID = button.getAttribute("data-copy-target");
       var target = targetID ? document.getElementById(targetID) : null;
       if (!target) return;
@@ -306,6 +384,8 @@
   function initSwatches() {
     var outputs = document.querySelectorAll("[data-swatch-value]");
     outputs.forEach(function (output) {
+      if (output.dataset.swatchReady) return;
+      output.dataset.swatchReady = "true";
       var input = document.getElementById(output.getAttribute("data-swatch-value"));
       if (!input) return;
       var sync = function () {
@@ -327,6 +407,8 @@
 
   function initRowLinks() {
     document.querySelectorAll("tr.row-link").forEach(function (row) {
+      if (row.dataset.rowReady) return;
+      row.dataset.rowReady = "true";
       var anchor = row.querySelector("a.row-anchor");
       if (!anchor) return;
       row.addEventListener("click", function (evt) {
@@ -338,13 +420,19 @@
     });
   }
 
-  document.addEventListener("DOMContentLoaded", function () {
-    configureHtmx();
+  function initContent() {
     initRowLinks();
     initPreview();
-    initConfirm();
     initTokenSecret();
     initCopyButtons();
     initSwatches();
+  }
+
+  document.addEventListener("DOMContentLoaded", function () {
+    configureHtmx();
+    configureResponses();
+    initConfirm();
+    initContent();
+    document.addEventListener("htmx:load", initContent);
   });
 })();

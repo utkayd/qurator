@@ -12,6 +12,7 @@ import (
 	"github.com/utkayd/qurator/internal/codes"
 	"github.com/utkayd/qurator/internal/console"
 	"github.com/utkayd/qurator/internal/domain"
+	"github.com/utkayd/qurator/internal/qr"
 	"github.com/utkayd/qurator/internal/store"
 )
 
@@ -122,6 +123,16 @@ func translateCodesErr(err error) error {
 		return fmt.Errorf("%w: the styling is not valid", console.ErrValidation)
 	case errors.Is(err, codes.ErrInvalidMode):
 		return fmt.Errorf("%w: mode must be dynamic or direct", console.ErrValidation)
+	case errors.Is(err, codes.ErrScanURLNotConfigured):
+		return fmt.Errorf("%w: dynamic codes need a public scan address; ask the operator to configure QURATOR_SERVER_BASE_URL, or choose direct mode", console.ErrValidation)
+	case errors.Is(err, qr.ErrContrastTooLow):
+		return fmt.Errorf("%w: increase the contrast between foreground and background colours", console.ErrValidation)
+	case errors.Is(err, qr.ErrDimensionsExceeded):
+		return fmt.Errorf("%w: the image dimensions exceed this instance's limit", console.ErrValidation)
+	case errors.Is(err, qr.ErrInvalidOption):
+		return fmt.Errorf("%w: one of the styling options is invalid", console.ErrValidation)
+	case errors.Is(err, qr.ErrContentTooLarge):
+		return fmt.Errorf("%w: the destination is too long for the selected error correction level", console.ErrValidation)
 	case errors.Is(err, codes.ErrDirectImmutable):
 		return fmt.Errorf("%w: this is a direct code; its destination is printed into the image and cannot be changed", console.ErrValidation)
 	}

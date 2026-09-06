@@ -34,6 +34,30 @@ func validConfig() Config {
 	return c
 }
 
+func TestValidateScanOrigin(t *testing.T) {
+	for _, raw := range []string{"qr.example", "//qr.example", "ftp://qr.example", "https://", "https://user:pass@qr.example", "https://qr.example/prefix", "https://qr.example/?q=x", "https://qr.example/?", "https://qr.example/#x", "https://qr.example/#", "https://qr.example:0", "https://qr.example:65536", "https://qr.example:"} {
+		t.Run(raw, func(t *testing.T) {
+			cfg := validConfig()
+			cfg.Server.BaseURL = raw
+			if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "server.base_url") {
+				t.Fatalf("invalid scan origin accepted: %q, err=%v", raw, err)
+			}
+		})
+	}
+	for _, raw := range []string{"", "https://qr.example", "https://qr.example/", "http://localhost:8080", "http://127.0.0.1:8080/", "http://[::1]:8080/"} {
+		t.Run(raw, func(t *testing.T) {
+			cfg := validConfig()
+			cfg.Server.BaseURL = raw
+			if err := cfg.Validate(); err != nil {
+				t.Fatal(err)
+			}
+			if cfg.Server.BaseURL != strings.TrimSuffix(raw, "/") {
+				t.Fatalf("origin not normalized: %q", cfg.Server.BaseURL)
+			}
+		})
+	}
+}
+
 // s3Config flips validConfig onto the S3 blob driver so image URL rules can be tested
 // against the one driver that can address its objects.
 func s3Config() Config {

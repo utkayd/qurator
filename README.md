@@ -28,6 +28,39 @@ curl -fsS localhost:8080/healthz   # 200 once the process is up
 curl -fsS localhost:8080/readyz    # 200 once its own storage is reachable
 ```
 
+### Sign in and create your first code
+
+The default start creates storage and a signing key. Sign-in needs the configured
+bootstrap account; it does not create a default password or enable public generation.
+On the first start with an empty user store, supply both bootstrap values:
+
+```bash
+QURATOR_AUTH_BOOTSTRAP_EMAIL='admin@example.com' \
+QURATOR_AUTH_BOOTSTRAP_PASSWORD='replace-with-your-own-long-password' \
+QURATOR_SERVER_BASE_URL='http://localhost:8080' \
+  ./bin/qurator
+```
+
+Open `http://localhost:8080/ui/` and sign in with those credentials. Once the account
+exists, bootstrap settings do not recreate it or reset its password. For persistent
+deployments, supply secrets through your normal protected environment/config mechanism.
+
+Before printing dynamic codes, set `QURATOR_SERVER_BASE_URL` to the address scanners
+can reach, such as `https://qr.example.com`. **A phone cannot reach your server through
+its own localhost address.** Keep that domain working for as long as printed codes
+must work. The value must be an absolute HTTP(S) origin with an optional port and root
+slash, without credentials, a path prefix, query, or fragment. Subpath hosting is not
+supported. Invalid nonempty values refuse startup.
+
+An empty base URL still permits startup and authenticated direct/ephemeral generation.
+New dynamic creation is refused with `503 scan_url_not_configured` before any image or
+metadata is written; batch requests report it per affected item. Existing codes are
+not rewritten, and retries using an existing `client_ref` can still return that code.
+
+Console and API password sign-in share a limit of ten attempts per minute per TCP
+peer. Behind a reverse proxy this is a shared proxy-wide allowance; forwarded address
+headers do not change it. Rejections return `429` with `Retry-After`.
+
 This isn't a "quick start that becomes a liability later" — it's Principle I of the
 project's constitution: **a person MUST be able to run a useful qurator instance with
 one command, one binary, and zero external services.** PostgreSQL and S3-compatible
@@ -38,8 +71,29 @@ Prebuilt binaries: see [Releases](https://github.com/utkayd/qurator/releases), o
 the container:
 
 ```bash
-docker run -p 8080:8080 -v qurator-data:/data ghcr.io/utkayd/qurator:latest
+docker run -d --name qurator --restart unless-stopped \
+  -p 8080:8080 -v qurator-data:/data \
+  -e QURATOR_AUTH_BOOTSTRAP_EMAIL='admin@example.com' \
+  -e QURATOR_AUTH_BOOTSTRAP_PASSWORD='replace-with-your-own-long-password' \
+  -e QURATOR_SERVER_BASE_URL='http://localhost:8080' \
+  ghcr.io/utkayd/qurator:latest
 ```
+
+To run your working copy, build with
+`docker build -f deploy/Dockerfile -t qurator:local .` and use `qurator:local`
+in the command above. Open `http://localhost:8080/ui/`. Set the base URL to your
+public HTTPS origin before printing dynamic codes.
+
+The image runs as UID/GID `65532:65532`, includes a readiness healthcheck, and
+stores SQLite, its signing key and QR images in `/data`. Keep the named volume
+when replacing containers. A host bind mount must be writable by that UID/GID;
+fresh named volumes receive the correct ownership automatically. The root
+filesystem can be read-only (`--read-only`). Inspect health with
+`docker inspect --format '{{.State.Health.Status}}' qurator`.
+
+Run `python3 tests/docker/smoke.py qurator:local` to verify a built image with
+isolated temporary storage. CI runs this on Linux AMD64 and ARM64; version tags
+publish both architectures to GHCR through the release workflow.
 
 ## Two modes
 
@@ -241,6 +295,11 @@ go test -race ./...          # green with no Docker running; Postgres/S3 suites 
 go vet ./...
 gofmt -l .                   # must print nothing
 ```
+
+The separate [browser regression suite](tests/browser/README.md) runs the real binary
+and embedded console in Chrome/Chromium, covering form errors, downloads, edits, token
+copy/revocation, and confirmations. It runs in its own CI job; it adds no deployed
+dependency and is not required for `go test ./...`.
 
 The default test run is Docker-free by design (skipped suites report themselves as
 skips, never as silent passes). The Postgres/S3 contract suites need real backends —
