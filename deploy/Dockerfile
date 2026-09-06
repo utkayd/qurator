@@ -5,7 +5,6 @@
 # decision below; nothing here should be "obviously" changed without reading it first.
 
 # --- builder --------------------------------------------------------------------------
-FROM golang:1.26-alpine AS builder
 
 # Verified to exist and resolve to a multi-arch index (linux/amd64, linux/arm64, and
 # others) as of this writing:
@@ -18,13 +17,17 @@ FROM golang:1.26-alpine AS builder
 # and note it in the commit that does so.
 ARG BASE_DIGEST=sha256:1c2c046bc09ed40fad370b599a0b1ae7987f55b01e247cf27a7c27cd97e5bbc7
 
+FROM golang:1.26-alpine AS builder
+
 WORKDIR /src
 
 # Cache module downloads across builds independent of source changes.
 COPY go.mod go.sum ./
 RUN go mod download
 
-COPY . .
+COPY cmd ./cmd
+COPY internal ./internal
+RUN mkdir -p /out/data
 
 ARG VERSION=dev
 ARG SOURCE_DATE_EPOCH=0
@@ -63,22 +66,23 @@ LABEL org.opencontainers.image.source="https://github.com/utkayd/qurator" \
 
 # The distroless nonroot variant already ships a "nonroot" user (UID 65532); USER here
 # is what actually applies it to the running container rather than only being present.
-USER nonroot
+USER 65532:65532
 
 COPY --from=builder --chown=nonroot:nonroot /out/qurator /qurator
+COPY --from=builder --chown=nonroot:nonroot /out/data /data
 
 # Zero-configuration defaults point at a volume so a plain `docker run -v` (or the
 # compose file alongside this Dockerfile) is enough to persist data across restarts.
-ENV QURATOR_DB_DSN=/data/qurator.db \
+ENV QURATOR_SERVER_DATA_DIR=/data \
+    QURATOR_DB_DSN=/data/qurator.db \
     QURATOR_BLOB_PATH=/data/blobs
 VOLUME ["/data"]
 EXPOSE 8080
 
-# No HEALTHCHECK: distroless has no shell and no coreutils, so there is no `curl`/`wget`
-# to invoke from CMD-SHELL, and HEALTHCHECK does not accept an argv-exec form that
-# could call into the qurator binary itself (it has no built-in health-probe
-# subcommand). Container-level health must come from the orchestrator hitting
-# GET /healthz and /readyz over HTTP instead (see deploy/compose.yaml, which does
-# exactly that from the postgres/minio sidecars' perspective, and README.md for the
-# equivalent guidance under Kubernetes).
+# distroless has no shell or curl, so the HEALTHCHECK uses the exec form and asks the
+# binary itself to probe its own /readyz (the `healthcheck` subcommand). Orchestrators
+# that prefer HTTP probes can hit GET /healthz and /readyz directly.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD ["/qurator", "healthcheck"]
+
 ENTRYPOINT ["/qurator"]

@@ -75,13 +75,14 @@ const (
 // Sentinel errors for validation failures. Each corresponds to a stable API error code
 // (contracts/errors.md); the HTTP layer maps them.
 var (
-	ErrUnsupportedScheme  = errors.New("codes: unsupported destination scheme")
-	ErrSelfReferential    = errors.New("codes: destination points at this instance's scan path")
-	ErrInvalidDestination = errors.New("codes: invalid destination")
-	ErrAliasInvalid       = errors.New("codes: invalid alias")
-	ErrAliasReserved      = errors.New("codes: alias is reserved")
-	ErrInvalidStyling     = errors.New("codes: invalid styling")
-	ErrInvalidMode        = errors.New("codes: invalid mode")
+	ErrUnsupportedScheme    = errors.New("codes: unsupported destination scheme")
+	ErrSelfReferential      = errors.New("codes: destination points at this instance's scan path")
+	ErrInvalidDestination   = errors.New("codes: invalid destination")
+	ErrAliasInvalid         = errors.New("codes: invalid alias")
+	ErrAliasReserved        = errors.New("codes: alias is reserved")
+	ErrInvalidStyling       = errors.New("codes: invalid styling")
+	ErrInvalidMode          = errors.New("codes: invalid mode")
+	ErrScanURLNotConfigured = errors.New("codes: scan URL is not configured")
 	// ErrDirectImmutable refuses destination and state changes on a direct code: the
 	// destination is printed into the image, and disable/enable only mean something on
 	// the redirect path (spec 002, FR-104).
@@ -152,12 +153,10 @@ func NewService(st store.Store, bl blob.BlobStore, r Renderer, cache *Cache, cfg
 	if cache == nil {
 		cache = NewCache()
 	}
-	baseRaw := strings.TrimRight(cfg.BaseURL, "/")
-	var base *url.URL
-	if baseRaw != "" {
-		if u, err := url.Parse(baseRaw); err == nil {
-			base = u
-		}
+	base, _ := domain.ParseScanOrigin(cfg.BaseURL) // config rejects malformed nonempty values at startup
+	baseRaw := ""
+	if base != nil {
+		baseRaw = base.String()
 	}
 	svc := &Service{
 		store: st, blob: bl, renderer: r, cache: cache, base: base, baseRaw: baseRaw, schemes: schemes,
@@ -460,6 +459,9 @@ func (s *Service) prepare(in CreateInput) (*prepared, error) {
 	case domain.ModeDynamic, domain.ModeDirect:
 	default:
 		return nil, vErr(ErrInvalidMode, map[string]any{"field": "mode"})
+	}
+	if mode == domain.ModeDynamic && s.base == nil {
+		return nil, vErr(ErrScanURLNotConfigured, nil)
 	}
 	if len(in.ClientRef) > MaxClientRefLen {
 		return nil, vErr(ErrClientRefInvalid, map[string]any{"field": "client_ref", "reason": "too_long", "max_length": MaxClientRefLen})

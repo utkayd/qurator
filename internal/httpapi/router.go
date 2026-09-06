@@ -38,15 +38,12 @@ type Options struct {
 	PerRoute []Middleware
 	Auth     Middleware
 	CSRF     Middleware // cookie-session CSRF check; protected group only
-	// SigninLimiter, when set, wraps ONLY "POST /v1/auth/signin". That route lives in
-	// the public group (it must be reachable anonymously) yet accepts a password, so it
-	// is the one public route that needs a brute-force limiter. It is applied innermost,
-	// so PerRoute middleware still observes rejected attempts.
+	// SigninLimiter wraps both password entry points with the same peer quota.
+	// Other console routes and public scan/image routes never consume that quota.
 	SigninLimiter Middleware
 }
 
-// SigninPattern is the one public route that takes a password; Options.SigninLimiter
-// is applied to it alone.
+// SigninPattern is the public API password route. Console sign-in shares its limiter.
 const SigninPattern = "POST /v1/auth/signin"
 
 // Routes is the full route table from contracts/openapi.yaml plus the console.
@@ -115,6 +112,17 @@ func NewRouter(h Handlers, o Options) http.Handler {
 		hd := withPattern(rt.Pattern, h.lookup(rt.Handler))
 		if rt.Pattern == SigninPattern && o.SigninLimiter != nil {
 			hd = o.SigninLimiter(hd)
+		}
+		if rt.Group == GroupConsole && o.SigninLimiter != nil {
+			next := hd
+			limited := o.SigninLimiter(next)
+			hd = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method == http.MethodPost && r.URL.Path == "/ui/signin" {
+					limited.ServeHTTP(w, r)
+					return
+				}
+				next.ServeHTTP(w, r)
+			})
 		}
 		for i := len(o.PerRoute) - 1; i >= 0; i-- {
 			hd = o.PerRoute[i](hd)

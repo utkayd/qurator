@@ -5,12 +5,12 @@
     <p class="page-subtitle">Bearer tokens for the HTTP API. Secrets are shown once, at creation.</p>
   </div>
 </div>
-{{if .Error}}<p class="banner banner-danger" role="alert">{{.Error}}</p>{{end}}
 
 <div class="tokens-layout">
   <section class="card">
     <h2 class="card-title">Create a token</h2>
     <form class="stack" hx-post="/ui/tokens" hx-target="body" hx-swap="outerHTML">
+      <div data-form-error tabindex="-1">{{if .Error}}<p class="banner banner-danger" role="alert">{{.Error}}</p>{{end}}</div>
       <div class="field">
         <label for="name">Name</label>
         <input type="text" id="name" name="name" required maxlength="128" placeholder="ci-pipeline">

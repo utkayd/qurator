@@ -296,6 +296,8 @@ func serviceErrorDetail(err error) (d httpapi.ErrorDetail, ok bool) {
 	switch {
 	case isRenderError(err):
 		return qrErrorDetail(err)
+	case errors.Is(err, codes.ErrScanURLNotConfigured):
+		return e(httpapi.CodeScanURLNotConfigured, "Dynamic codes need a public scan address. Ask the operator to configure QURATOR_SERVER_BASE_URL, or create a direct code.", nil)
 	case errors.As(err, &ce):
 		return e(httpapi.CodeConflict, "The code was modified by another request; re-read it and retry with its current version.",
 			map[string]any{"expected": ce.Expected, "actual": ce.Actual})
