@@ -401,7 +401,6 @@ func TestConsoleLifecycle(t *testing.T) {
 	resp = doRequest(t, client, http.MethodPost, srv.URL+"/ui/codes", url.Values{
 		"destination":    {"https://example.com/spring-sale"},
 		"alias":          {"spring-sale"},
-		"format":         {"png"},
 		"fg_color":       {"#101828"},
 		"bg_color":       {"#ffffff"},
 		"module_shape":   {"rounded"},
@@ -564,7 +563,6 @@ func TestConsoleDirectAndDynamicModes(t *testing.T) {
 	resp = doRequest(t, client, http.MethodPost, srv.URL+"/ui/codes", url.Values{
 		"destination": {"https://example.com/direct-target"},
 		"mode":        {"direct"},
-		"format":      {"png"},
 	}, true, nil)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("create direct code: status %d, body: %s", resp.StatusCode, readBody(t, resp))
@@ -600,7 +598,6 @@ func TestConsoleDirectAndDynamicModes(t *testing.T) {
 	resp = doRequest(t, client, http.MethodPost, srv.URL+"/ui/codes", url.Values{
 		"destination": {"https://example.com/dynamic-target"},
 		"mode":        {"dynamic"},
-		"format":      {"png"},
 	}, true, nil)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("create dynamic code: status %d, body: %s", resp.StatusCode, readBody(t, resp))
@@ -621,7 +618,6 @@ func TestConsoleDirectAndDynamicModes(t *testing.T) {
 	resp = doRequest(t, client, http.MethodPost, srv.URL+"/ui/codes", url.Values{
 		"destination": {"https://example.com/bogus-mode"},
 		"mode":        {"bogus"},
-		"format":      {"png"},
 	}, true, nil)
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("expected 400 for unknown mode, got %d", resp.StatusCode)
@@ -664,7 +660,6 @@ func TestConsoleCodeDetailStorageURL(t *testing.T) {
 	// A code with a storage URL.
 	resp = doRequest(t, client, http.MethodPost, srv.URL+"/ui/codes", url.Values{
 		"destination": {"https://example.com/with-storage"},
-		"format":      {"png"},
 	}, true, nil)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("create code: status %d, body: %s", resp.StatusCode, readBody(t, resp))
@@ -678,7 +673,6 @@ func TestConsoleCodeDetailStorageURL(t *testing.T) {
 	// A code without one.
 	resp = doRequest(t, client, http.MethodPost, srv.URL+"/ui/codes", url.Values{
 		"destination": {"https://example.com/without-storage"},
-		"format":      {"png"},
 	}, true, nil)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("create code: status %d, body: %s", resp.StatusCode, readBody(t, resp))
@@ -747,4 +741,48 @@ func readBody(t *testing.T, resp *http.Response) string {
 		}
 	}
 	return b.String()
+}
+
+// TestConsoleNewCodeFormHasNoFormatControl pins the interim fix for review finding F05:
+// the console only ever stores and serves PNG, so the new-code form must not offer an
+// image-format choice, and a stray format field (say, from an old cached page) must be
+// ignored rather than silently producing a PNG the user was told would be SVG.
+func TestConsoleNewCodeFormHasNoFormatControl(t *testing.T) {
+	srv, client, auth := newTestServer(t)
+	auth.addUser(domain.User{ID: "usr_1", Email: "owner@example.com"}, "correct horse battery staple")
+
+	resp := doRequest(t, client, http.MethodPost, srv.URL+"/ui/signin", url.Values{
+		"email":    {"owner@example.com"},
+		"password": {"correct horse battery staple"},
+	}, false, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("sign-in failed: status=%d", resp.StatusCode)
+	}
+	_ = resp.Body.Close()
+
+	resp = doRequest(t, client, http.MethodGet, srv.URL+"/ui/codes/new", nil, false, nil)
+	newBody := readBody(t, resp)
+	doc := mustParseHTML(t, newBody)
+	formatControls := findAll(doc, func(n *html.Node) bool {
+		name, ok := attr(n, "name")
+		return ok && name == "format"
+	})
+	if len(formatControls) != 0 {
+		t.Fatalf("new-code form still offers a format control; saved codes are PNG-only:\n%s", newBody)
+	}
+	if !strings.Contains(newBody, "served as PNG") {
+		t.Fatalf("new-code form does not tell the user that saved codes are PNG:\n%s", newBody)
+	}
+
+	resp = doRequest(t, client, http.MethodPost, srv.URL+"/ui/codes", url.Values{
+		"destination": {"https://example.com/format-check"},
+		"format":      {"svg"},
+	}, true, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("create code with stray format field: status %d, body: %s", resp.StatusCode, readBody(t, resp))
+	}
+	detailBody := readBody(t, resp)
+	if !strings.Contains(detailBody, ".png") || strings.Contains(detailBody, ".svg") {
+		t.Fatalf("detail page must offer a PNG download and no SVG one:\n%s", detailBody)
+	}
 }

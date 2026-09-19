@@ -270,7 +270,6 @@ type codeNewData struct {
 	Destination   string
 	Alias         string
 	Mode          string
-	Format        string
 	FgColor       string
 	BgColor       string
 	ModuleShape   string
@@ -283,7 +282,6 @@ type codeNewData struct {
 func defaultCodeNewData() codeNewData {
 	return codeNewData{
 		Mode:          modeDynamic,
-		Format:        "png",
 		FgColor:       "#101828",
 		BgColor:       "#FFFFFF",
 		ModuleShape:   string(domain.ShapeSquare),
@@ -310,9 +308,8 @@ func (h *Handler) postCodeCreate(w http.ResponseWriter, r *http.Request) {
 	if v := r.FormValue("mode"); v != "" {
 		data.Mode = v
 	}
-	if v := r.FormValue("format"); v != "" {
-		data.Format = v
-	}
+	// No "format" field is read: saved codes are always stored and served as PNG,
+	// so the form offers no such choice (review F05; an SVG endpoint is follow-up work).
 	if v := r.FormValue("fg_color"); v != "" {
 		data.FgColor = v
 	}

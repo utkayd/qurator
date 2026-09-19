@@ -147,9 +147,9 @@
       var content = data.get("destination");
       if (content) params.set("content", String(content));
       // Only styling fields feed the preview beyond that; alias and destination
-      // validation happens server-side on save, not on every keystroke.
+      // validation happens server-side on save, not on every keystroke. No format
+      // is sent: the preview stays PNG, matching the only format a saved code has.
       var passthrough = [
-        "format",
         "fg_color",
         "bg_color",
         "module_shape",
