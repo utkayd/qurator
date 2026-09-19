@@ -119,12 +119,23 @@ jobs:
   smoke-test:
     needs: build-and-push
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
     strategy:
       matrix:
         platform: [linux/amd64, linux/arm64]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
+
+      # A freshly created GHCR package is private until the maintainer makes it public,
+      # so the pull must authenticate or the very first release run fails here.
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Verify health, nonroot QR generation and persistent storage
         run: python3 tests/docker/smoke.py "${{ env.IMAGE }}:${{ needs.build-and-push.outputs.version }}" "${{ matrix.platform }}"
@@ -169,11 +180,8 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          prerelease=()
-          case "$TAG" in *-*) prerelease=(--prerelease) ;; esac
           gh release create "$TAG" \
             --title "$TAG" \
             --verify-tag \
             --generate-notes \
-            "${prerelease[@]}" \
             dist/qurator_* dist/SHA256SUMS
