@@ -1,0 +1,16 @@
+# Keeps the SHA-pinned actions in .github/workflows/*.yml and the Go module graph
+# current. Action pins are full commit SHAs with a version comment; Dependabot
+# updates both together.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      github-actions:
+        patterns: ["*"]
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly

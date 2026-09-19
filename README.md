@@ -76,8 +76,15 @@ one command, one binary, and zero external services.** PostgreSQL and S3-compati
 storage exist as an *upgrade* (below), never as a prerequisite. If a feature can't work
 on the default stack, that's a bug, not an acceptable tradeoff.
 
-Prebuilt binaries: see [Releases](https://github.com/utkayd/qurator/releases), or run
-the container:
+Build from source (Go 1.26, no cgo):
+
+```bash
+git clone https://github.com/utkayd/qurator.git && cd qurator
+make build                      # writes ./bin/qurator, a static binary
+```
+
+Or build the container image from your working copy with
+`docker build -f deploy/Dockerfile -t qurator:local .` and run it:
 
 ```bash
 docker run -d --name qurator --restart unless-stopped \
@@ -85,12 +92,15 @@ docker run -d --name qurator --restart unless-stopped \
   -e QURATOR_AUTH_BOOTSTRAP_EMAIL='admin@example.com' \
   -e QURATOR_AUTH_BOOTSTRAP_PASSWORD='replace-with-your-own-long-password' \
   -e QURATOR_SERVER_BASE_URL='http://localhost:8080' \
-  ghcr.io/utkayd/qurator:latest
+  qurator:local
 ```
 
-To run your working copy, build with
-`docker build -f deploy/Dockerfile -t qurator:local .` and use `qurator:local`
-in the command above. Open `http://localhost:8080/ui/`. Set the base URL to your
+Prebuilt binaries on the [Releases](https://github.com/utkayd/qurator/releases) page
+and the `ghcr.io/utkayd/qurator` image are published from tagged releases (`v*`).
+The `latest` image tag is applied only after that release's image passes the smoke
+test on both architectures.
+Once a release exists, use `ghcr.io/utkayd/qurator:latest` (or a version tag) in place
+of `qurator:local` above. Open `http://localhost:8080/ui/`. Set the base URL to your
 public HTTPS origin before printing dynamic codes.
 
 The image runs as UID/GID `65532:65532`, includes a readiness healthcheck, and

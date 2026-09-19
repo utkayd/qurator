@@ -1,26 +1,85 @@
 name: release
 
-# Builds and publishes the multi-arch qurator image on a version tag, reproducibly
-# (research.md §6: -trimpath, empty -buildid, SOURCE_DATE_EPOCH-driven timestamps), then
-# smoke-tests it on each published platform as the nonroot user.
+# A v* tag produces a real release:
+#   1. `binaries` cross-compiles the static binary for linux/darwin/windows on
+#      amd64/arm64 (CGO_ENABLED=0, -trimpath, -s -w, main.version=<tag>) and writes
+#      SHA256SUMS.
+#   2. `build-and-push` builds the multi-arch image reproducibly (research.md §6:
+#      -trimpath, empty -buildid, SOURCE_DATE_EPOCH-driven timestamps) and pushes it
+#      under its version tag ONLY.
+#   3. `smoke-test` runs tests/docker/smoke.py against that pushed image on each
+#      platform as the nonroot user.
+#   4. Only after the smoke test passes, `promote-latest` re-tags the verified image
+#      index as :latest and `github-release` publishes the GitHub Release with the
+#      binaries and checksums. Nothing a user is told to pull exists before it has
+#      been tested.
 on:
   push:
     tags: ["v*"]
 
+# Least privilege by default; jobs that publish raise what they need explicitly.
 permissions:
   contents: read
-  packages: write
 
 env:
   IMAGE: ghcr.io/utkayd/qurator
 
 jobs:
+  binaries:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with: { go-version-file: go.mod }
+
+      - name: Cross-compile static binaries
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64; do
+            goos="${target%/*}"; goarch="${target#*/}"
+            ext=""; [ "$goos" = windows ] && ext=".exe"
+            out="dist/qurator_${VERSION}_${goos}_${goarch}${ext}"
+            echo "building $out"
+            # CGO_ENABLED=0 is Constitution Principle I (single static binary), which is
+            # also what makes plain cross-compilation possible here with no toolchains.
+            CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" go build -trimpath \
+              -ldflags "-s -w -buildid= -X main.version=${VERSION}" \
+              -o "$out" ./cmd/qurator
+          done
+
+      - name: Verify the host-platform binary is static and reports the tag
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          bin="dist/qurator_${VERSION}_linux_amd64"
+          file "$bin" | grep -q "statically linked" || { file "$bin"; exit 1; }
+          "$bin" --version | tee /dev/stderr | grep -qx "qurator ${VERSION}"
+
+      - name: Write SHA256SUMS
+        run: |
+          set -euo pipefail
+          (cd dist && sha256sum qurator_* > SHA256SUMS && cat SHA256SUMS)
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: binaries
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
+
   build-and-push:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
     outputs:
       version: ${{ steps.meta.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Derive version and SOURCE_DATE_EPOCH from the tag commit
         id: meta
@@ -28,31 +87,34 @@ jobs:
           echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
           echo "source_date_epoch=$(git log -1 --format=%ct "$GITHUB_SHA")" >> "$GITHUB_OUTPUT"
 
-      - uses: docker/setup-qemu-action@v3
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
 
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - uses: docker/build-push-action@v6
+      - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: .
           file: deploy/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
+          # VERSION is the full tag (v0.1.0) so `qurator --version` inside the image
+          # matches the release binaries and a local `make build` on the same commit.
           build-args: |
-            VERSION=${{ steps.meta.outputs.version }}
+            VERSION=${{ github.ref_name }}
             SOURCE_DATE_EPOCH=${{ steps.meta.outputs.source_date_epoch }}
           # --rewrite-timestamp normalises every layer's recorded mtime to
           # SOURCE_DATE_EPOCH so the same source at the same commit produces the same
           # image regardless of when the build ran (research.md §6).
           outputs: type=image,name=${{ env.IMAGE }},push=true,rewrite-timestamp=true
+          # Version tag only. :latest is applied by promote-latest after smoke-test
+          # passes, so a broken build can never become what `docker run` pulls by default.
           tags: |
             ${{ env.IMAGE }}:${{ steps.meta.outputs.version }}
-            ${{ env.IMAGE }}:latest
 
   smoke-test:
     needs: build-and-push
@@ -61,8 +123,57 @@ jobs:
       matrix:
         platform: [linux/amd64, linux/arm64]
     steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-qemu-action@v3
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
 
       - name: Verify health, nonroot QR generation and persistent storage
         run: python3 tests/docker/smoke.py "${{ env.IMAGE }}:${{ needs.build-and-push.outputs.version }}" "${{ matrix.platform }}"
+
+  promote-latest:
+    needs: [build-and-push, smoke-test]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Tag the smoke-tested image index as latest
+        # imagetools re-points a tag at the existing multi-arch index; nothing is rebuilt,
+        # so :latest is byte-for-byte the index smoke-test just verified.
+        run: docker buildx imagetools create --tag "${IMAGE}:latest" "${IMAGE}:${{ needs.build-and-push.outputs.version }}"
+
+  github-release:
+    needs: [binaries, smoke-test]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: binaries
+          path: dist/
+
+      - name: Verify checksums survived the artifact round-trip
+        run: (cd dist && sha256sum -c SHA256SUMS)
+
+      - name: Create the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          prerelease=()
+          case "$TAG" in *-*) prerelease=(--prerelease) ;; esac
+          gh release create "$TAG" \
+            --title "$TAG" \
+            --verify-tag \
+            --generate-notes \
+            "${prerelease[@]}" \
+            dist/qurator_* dist/SHA256SUMS
