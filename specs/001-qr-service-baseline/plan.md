@@ -37,16 +37,18 @@ provably impossible. Each reversal and its evidence is recorded in
 | `piglig/go-qr` | v1.1.0 | QR encoding, PNG + SVG | Only library with PNG *and* SVG plus logo ECC budgeting; MIT; deterministic output |
 | `golang-jwt/jwt/v5` | v5.3.1 | JWT signing/verification | Zero transitive dependencies (verified). Replaces rejected `go-pkgz/auth` |
 | `golang.org/x/crypto` | latest | Argon2id for the admin password | Stdlib-adjacent; the one human-chosen secret needs a real KDF |
-| `modernc.org/sqlite` | v1.58.0 | Default metadata store | Pure Go — the only way to keep `CGO_ENABLED=0` and a static binary |
-| `jackc/pgx/v5` | v5.10.0 | PostgreSQL driver | Used via `database/sql` for one common query layer |
+| `modernc.org/sqlite` | latest | Default metadata store | Pure Go — the only way to keep `CGO_ENABLED=0` and a static binary |
+| `jackc/pgx/v5` | latest | PostgreSQL driver | Used via `database/sql` for one common query layer |
 | `pressly/goose/v3` | v3.28.0 | Embedded migrations | Go-based migrations give one ordered sequence across both dialects |
 | `minio/minio-go/v7` | v7.3.0 | S3-compatible blob store | 5.72MB vs 7.39MB and 59 vs 113 deps against aws-sdk-go-v2; purpose-built for self-hosted S3 |
 | `maypok86/otter/v2` | latest | Scan resolution cache | 3.9ns/op zero-alloc on our skewed hot-key workload; bounded memory |
-| `medama-io/go-useragent` | v1.2.4 | UA family + device class | 314ns zero-alloc; ~1.8MB measured binary cost |
+| `medama-io/go-useragent` | latest | UA family + device class | 314ns zero-alloc; ~1.8MB measured binary cost |
 | `knadh/koanf/v2` | v2.3.6 | Configuration | Only candidate satisfying flags > env > file > default |
 | `prometheus/client_golang` | v1.24.1 | Metrics | Standard; required by Principle VIII |
 | `makiuchi-d/gozxing` | v0.1.1 | **Test-only** independent decoder | Principle VII requires decode-based round-trip verification |
 | `srwiley/oksvg` + `rasterx` | latest | **Test-only** SVG rasterisation | Lets SVG output be decoded and proven scannable |
+
+Pinned versions are owned by `go.mod`; the table records the selection rationale only.
 
 Router, HTTP serving, embedding, and logging use the standard library only
 (`net/http.ServeMux`, `embed`, `log/slog`).
