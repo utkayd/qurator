@@ -294,9 +294,11 @@ token secrets. What it deliberately leaves out, and why:
   are, a restored code's image URL returns 404; its redirect keeps working.
 - User passwords and API token secrets are never written to an export. A restored
   instance keeps the users from the archive, but local users have no password after
-  import and there is no password-reset command: sign in through forward-auth or
-  create the user again. A restored token record is informational only — it cannot
-  authenticate, and re-importing one does not attempt to.
+  import and there is no password-reset command: forward-auth is the way back in for
+  those accounts. Bootstrap credentials cannot help after the fact — they only act on
+  an empty store, before the import, and only for an email that is absent from the
+  archive. A restored token record is informational only — it cannot authenticate,
+  and re-importing one does not attempt to.
 - `import` refuses to run against a store that already has users, unless you pass
   `--force` — it's an "into a fresh instance" tool, not a merge tool.
 
