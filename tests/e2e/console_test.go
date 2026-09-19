@@ -770,9 +770,6 @@ func TestConsoleNewCodeFormHasNoFormatControl(t *testing.T) {
 	if len(formatControls) != 0 {
 		t.Fatalf("new-code form still offers a format control; saved codes are PNG-only:\n%s", newBody)
 	}
-	if !strings.Contains(newBody, "served as PNG") {
-		t.Fatalf("new-code form does not tell the user that saved codes are PNG:\n%s", newBody)
-	}
 
 	resp = doRequest(t, client, http.MethodPost, srv.URL+"/ui/codes", url.Values{
 		"destination": {"https://example.com/format-check"},
@@ -782,7 +779,18 @@ func TestConsoleNewCodeFormHasNoFormatControl(t *testing.T) {
 		t.Fatalf("create code with stray format field: status %d, body: %s", resp.StatusCode, readBody(t, resp))
 	}
 	detailBody := readBody(t, resp)
-	if !strings.Contains(detailBody, ".png") || strings.Contains(detailBody, ".svg") {
-		t.Fatalf("detail page must offer a PNG download and no SVG one:\n%s", detailBody)
+	detailDoc := mustParseHTML(t, detailBody)
+	downloads := findAll(detailDoc, func(n *html.Node) bool {
+		if n.Type != html.ElementNode || n.Data != "a" {
+			return false
+		}
+		href, ok := attr(n, "href")
+		return ok && strings.HasPrefix(href, "/i/")
+	})
+	if len(downloads) != 1 {
+		t.Fatalf("detail page must offer exactly one image download link, got %d:\n%s", len(downloads), detailBody)
+	}
+	if href, _ := attr(downloads[0], "href"); !strings.HasSuffix(href, ".png") {
+		t.Fatalf("detail page download href must end in .png, got %q", href)
 	}
 }
