@@ -30,6 +30,8 @@ services:
       QURATOR_AUTH_BOOTSTRAP_EMAIL: admin@example.com
       QURATOR_AUTH_BOOTSTRAP_PASSWORD: replace-with-your-own-long-password
       QURATOR_SERVER_BASE_URL: http://localhost:8080
+    volumes:
+      - qurator-data:/data
     depends_on:
       postgres:
         condition: service_healthy
@@ -94,5 +96,6 @@ services:
         echo "export QURATOR_TEST_S3_ENDPOINT=$$QURATOR_TEST_S3_ENDPOINT"
 
 volumes:
+  qurator-data:
   qurator-postgres-data:
   qurator-minio-data:

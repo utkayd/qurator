@@ -292,9 +292,11 @@ token secrets. What it deliberately leaves out, and why:
 - Images and logos are not in the archive. Rendered code images are regenerated from
   the metadata; uploaded logos are blobs that live in the blob store, not the export.
 - User passwords and API token secrets are never written to an export. A user restored
-  from an export has no usable local password: there is no password-reset command, so
-  either sign in with a fresh bootstrap account or forward-auth, or create the user
-  again. A restored token record is informational only — it cannot authenticate, and
+  from an export has no usable local password, and there is no password-reset command.
+  Bootstrap credentials do nothing once any user exists, so to keep a local admin you
+  must start the fresh instance with bootstrap credentials first, then run `import`
+  with `--force`; otherwise sign in through forward-auth or create the user again. A
+  restored token record is informational only — it cannot authenticate, and
   re-importing one does not attempt to.
 - `import` refuses to run against a store that already has users, unless you pass
   `--force` — it's an "into a fresh instance" tool, not a merge tool.
@@ -307,8 +309,9 @@ curl -fsS -H "Authorization: Bearer $ADMIN_TOKEN" localhost:8080/v1/export -o ex
 
 **For a complete backup, copy the data directory instead.** In zero-config mode
 everything qurator owns lives under `./data/`: the SQLite database, the blob store
-(`data/blobs/`, including logos), and `data/signing.key`, which signs sessions and
-tokens. Back those up together, with the service stopped, and restoring that directory
+(`data/blobs/`, including logos), and `data/signing.key`, which signs console sessions
+(API tokens are stored hashed in the database and do not depend on it). Back those up
+together, with the service stopped, and restoring that directory
 restores the instance exactly, credentials included. With PostgreSQL and S3, the
 equivalent is a database backup, a bucket copy, and the signing key (or the
 `QURATOR_AUTH_SIGNING_SECRET` you configured) taken together.
@@ -364,5 +367,5 @@ goes unexercised entirely.
 qurator is released under the [MIT License](LICENSE).
 
 The vendored htmx library in `internal/console/assets/vendor/` is distributed
-under its own BSD-2-Clause license; see
+under its own Zero-Clause BSD (0BSD) license; see
 `internal/console/assets/vendor/htmx-LICENSE`.
