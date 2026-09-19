@@ -1,2 +1,2 @@
-// Package httpapi — see specs/001-qr-service-baseline/plan.md for its role and boundaries.
+// Package httpapi — see docs/design/001-qr-service-baseline/plan.md for its role and boundaries.
 package httpapi

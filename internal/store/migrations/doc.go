@@ -1,2 +1,2 @@
-// Package migrations — see specs/001-qr-service-baseline/plan.md for its role and boundaries.
+// Package migrations — see docs/design/001-qr-service-baseline/plan.md for its role and boundaries.
 package migrations

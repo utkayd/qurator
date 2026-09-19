@@ -7,11 +7,10 @@
 //
 // TestShutdown_DrainsInFlightThenFlushes exercises the SAME shutdown sequence main.go
 // uses (copied into runShutdownSequence below) against an in-process server with a slow
-// handler and a fakeFlusher standing in for the analytics pipeline. It was written on
-// stream/f-ops before any store driver existed, and it remains the precise test of
-// sequencing and budgets.
+// handler and a fakeFlusher standing in for the analytics pipeline; it is the precise
+// test of sequencing and budgets and needs no store driver.
 //
-// TestShutdown_RealBinary (Stage 3, T096-literal, quickstart Scenario 8) builds and
+// TestShutdown_RealBinary (T096, quickstart Scenario 8) builds and
 // execs the actual qurator binary, sends SIGTERM while 500 scans are in flight, and
 // asserts from the outside: exit 0, no accepted request dropped, and after a restart on
 // the same data directory the analytics total equals the number of 302s served.
@@ -50,8 +49,7 @@ func (f *fakeFlusher) Close(ctx context.Context) error {
 
 // runShutdownSequence mirrors main.go's run(): drain the HTTP server under
 // shutdownBudget, THEN flush analytics under a separate flushBudget. It is a copy
-// rather than a shared helper because main.go is out of this stream's ownership
-// (Hard rules) and does not exist yet in this worktree (see the package doc).
+// rather than a shared helper so the test pins the ordering independently of main.go.
 func runShutdownSequence(t *testing.T, srv *http.Server, flusher *fakeFlusher, shutdownBudget, flushBudget time.Duration) {
 	t.Helper()
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownBudget)

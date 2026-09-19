@@ -1,2 +1,2 @@
-// Package domain — see specs/001-qr-service-baseline/plan.md for its role and boundaries.
+// Package domain — see docs/design/001-qr-service-baseline/plan.md for its role and boundaries.
 package domain

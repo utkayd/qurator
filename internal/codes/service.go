@@ -23,9 +23,9 @@ import (
 
 // Renderer produces the persisted PNG for a code. For a dynamic code the QR content is
 // the instance's scan URL for the short code (FR-007), never the destination; for a
-// direct code it is the destination itself (spec 002, FR-102). Stream A's internal/qr
-// provides the real implementation; this package depends only on the interface so it
-// can be tested with a fake.
+// direct code it is the destination itself (spec 002, FR-102). internal/qr provides the
+// real implementation; this package depends only on the interface so it can be tested
+// with a fake.
 //
 // logo is the optional centre overlay's original bytes (PNG or JPEG) and autoRaise
 // whether the renderer may raise the EC level to fit it (FR-027). effective is the level

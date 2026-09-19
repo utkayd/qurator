@@ -53,13 +53,8 @@ type CodesService interface {
 	// StorageURL returns the rendered code image's persisted storage URL (FR-208),
 	// e.g. an S3/presigned URL, and ok=false when the code has none (url_mode off,
 	// or the code predates storage). The console shows this on the code detail page
-	// with a copy button when ok is true.
-	//
-	// Wiring-Needed: cmd/qurator/console_adapters.go's codesAdapter needs a
-	// StorageURL(ctx, userID, id) method: do the same ownership Get(ctx, userID, id)
-	// the adapter's existing Get does, then call svc.StorageURL(ctx, code) on the
-	// underlying internal/codes service to resolve the persisted URL, translating a
-	// "not found" the same way Get does (returning console.ErrNotFound).
+	// with a copy button when ok is true; cmd/qurator/console_adapters.go implements it
+	// on top of the codes service.
 	StorageURL(ctx context.Context, userID, id string) (url string, ok bool, err error)
 }
 
@@ -103,7 +98,7 @@ type Deps struct {
 
 // Code modes, mirroring domain.ModeDynamic/domain.ModeDirect as plain strings so this
 // package can be built and tested before the domain package grows a Mode field
-// (specs/002-direct-codes). Once domain.Code.Mode exists, codeMode below is the sole
+// (docs/design/002-direct-codes). Once domain.Code.Mode exists, codeMode below is the sole
 // place that bridges the two.
 const (
 	modeDynamic = "dynamic"

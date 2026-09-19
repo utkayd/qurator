@@ -20,7 +20,7 @@ import (
 )
 
 // IdentityFunc extracts the authenticated user from the request. The auth middleware
-// (Stream C) supplies the real one from its context value; tests supply a header reader.
+// supplies the real one from its context value; tests supply a header reader.
 type IdentityFunc func(r *http.Request) (userID string, ok bool)
 
 // CodesHandler serves every /v1/codes* route (contracts/openapi.yaml, tags: codes).

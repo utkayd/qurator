@@ -1,5 +1,5 @@
 // Package contract holds black-box tests that pin the HTTP surface described in
-// specs/001-qr-service-baseline/contracts/openapi.yaml.
+// docs/design/001-qr-service-baseline/contracts/openapi.yaml.
 package contract
 
 import (

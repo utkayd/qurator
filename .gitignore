@@ -19,8 +19,8 @@ coverage.*
 .env.*
 !.env.example
 
-# Agent folders (may hold credentials)
-.claude/settings.local.json
+# Agent folders (local skills, settings; may hold credentials)
+.claude/
 
 # OS
 .DS_Store

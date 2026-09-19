@@ -1,27 +1,5 @@
-// Command qurator — export/import subcommands (US7, T097). This file only defines
-// runExport/runImport; wiring them into main() is a one-line dispatch documented below
-// as Wiring-Needed, left undone here because main.go does not exist yet in this stream's
-// worktree (Stage 2 builds it from the frozen foundation commit, which predates this
-// file — see the package-level report for details) and this ownership's Hard rules
-// forbid editing it directly.
-//
-// Wiring-Needed (main.go): main()'s run() currently checks for --version/-v and then
-// falls straight through to config.Load and starting the server. It needs one more
-// branch, ahead of that fallthrough:
-//
-//	if len(args) > 0 {
-//		switch args[0] {
-//		case "export":
-//			return runExport(ctx, args[1:], lookupEnv, stdout)
-//		case "import":
-//			return runImport(ctx, args[1:], lookupEnv, stdout)
-//		}
-//	}
-//
-// placed in run(), right after the --version/-v loop and before config.Load — both
-// subcommands do their own config.Load + store.Open internally (the same way main()
-// opens its store), so nothing else in run() needs to change, and no driver import
-// changes are needed beyond whatever main.go already blank-imports.
+// Export and import subcommands (US7): runExport and runImport implement `qurator export`
+// and `qurator import`, dispatched from run() in main.go.
 package main
 
 import (

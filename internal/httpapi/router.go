@@ -9,8 +9,8 @@ import (
 // Middleware is the standard wrapping shape.
 type Middleware func(http.Handler) http.Handler
 
-// Handlers are the per-stream handler sets. Each Stage 2 stream fills its own; the
-// foundation supplies stubs. Nil entries fall back to notImplemented.
+// Handlers are the handler sets main.go wires into the route table; nil entries fall
+// back to NotImplemented.
 type Handlers struct {
 	Public    http.Handler // /r/{code}, /i/{id}.{ext}
 	QR        http.Handler // /v1/qr
@@ -47,8 +47,8 @@ type Options struct {
 const SigninPattern = "POST /v1/auth/signin"
 
 // Routes is the full route table from contracts/openapi.yaml plus the console.
-// Every entry is registered even when its handler is a stub, so Stage 2 streams fill
-// handlers rather than editing this file.
+// Every entry is registered even when its handler is nil, so the route table stays the
+// single source of truth for what the server exposes.
 var Routes = []Route{
 	// Public — NO auth middleware, ever.
 	{Group: GroupPublic, Pattern: "GET /r/{code}", Handler: "Public"},
@@ -78,7 +78,7 @@ var Routes = []Route{
 	{Group: GroupProtected, Pattern: "GET /v1/export", Handler: "Export"},
 
 	// Console — protected group; the console handler renders its own sign-in page for
-	// anonymous requests, so /ui/ is mounted with auth in "optional" mode by the stream.
+	// anonymous requests, so /ui/ is mounted with auth in "optional" mode.
 	{Group: GroupConsole, Pattern: "/ui/", Handler: "Console"},
 }
 
@@ -101,7 +101,7 @@ type Route struct {
 // NewRouter builds the root handler. The ephemeral endpoint (/v1/qr) sits in the
 // protected group; when config makes it public the QR handler itself decides to accept
 // anonymous identities — the auth middleware attaches identity but does not reject on
-// that route (see auth stream). Public scan routes are a separate mux that the auth
+// that route (see internal/auth). Public scan routes are a separate mux that the auth
 // middleware is never applied to.
 func NewRouter(h Handlers, o Options) http.Handler {
 	public := http.NewServeMux()
@@ -198,7 +198,7 @@ func (h Handlers) lookup(name string) http.Handler {
 	return hd
 }
 
-// NotImplemented is the foundation stub for every route a stream has not filled yet.
+// NotImplemented answers 501 for any route in the table that has no handler wired.
 func NotImplemented() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, CodeNotImplemented, "This endpoint is not implemented yet.", map[string]any{"route": r.Pattern})

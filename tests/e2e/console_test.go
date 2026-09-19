@@ -1,11 +1,8 @@
-// Package e2e exercises the console over real HTTP, the way a browser (or a browser
-// minus its JavaScript engine, since this test has none) would: cookies via a jar,
-// requests via net/http, and HTML parsed structurally via golang.org/x/net/html rather
-// than by substring matching wherever a real assertion is possible.
-//
-// It builds internal/console.Handler directly against small in-memory fakes of the
-// service-layer interfaces the console defines (internal/console/types.go) — it does not
-// depend on any other stream's implementation, per this stream's isolation contract.
+// Package e2e is the HTTP-with-fakes console suite: it exercises internal/console.Handler
+// over real HTTP with in-memory fakes of the service interfaces in
+// internal/console/types.go, using a cookie jar, net/http, and structural HTML parsing
+// via golang.org/x/net/html. It runs no JavaScript and starts no binary; the real
+// browser end-to-end suite lives in tests/browser.
 package e2e
 
 import (
@@ -29,7 +26,7 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// Fakes — this stream's own implementations of the interfaces the console defines.
+// Fakes — in-memory implementations of the interfaces the console defines.
 // ---------------------------------------------------------------------------
 
 type e2eAuth struct {
@@ -543,7 +540,7 @@ func TestConsoleLifecycle(t *testing.T) {
 }
 
 // TestConsoleDirectAndDynamicModes exercises US1 scenario 5 / US2 scenario 3 / US3
-// scenario 2 from specs/002-direct-codes/spec.md: a direct code's detail page hides the
+// scenario 2 from docs/design/002-direct-codes/spec.md: a direct code's detail page hides the
 // destination-edit form and the disable/enable controls and replaces the analytics
 // section with an explanation, while a dynamic code's detail page still shows both.
 func TestConsoleDirectAndDynamicModes(t *testing.T) {
