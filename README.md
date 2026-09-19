@@ -289,15 +289,14 @@ does not hold a million rows in memory at once.
 and tokens, but no rendered images, no uploaded logos, no password hashes, and no
 token secrets. What it deliberately leaves out, and why:
 
-- Images and logos are not in the archive. Rendered code images are regenerated from
-  the metadata; uploaded logos are blobs that live in the blob store, not the export.
-- User passwords and API token secrets are never written to an export. A user restored
-  from an export has no usable local password, and there is no password-reset command.
-  Bootstrap credentials do nothing once any user exists, so to keep a local admin you
-  must start the fresh instance with bootstrap credentials first, then run `import`
-  with `--force`; otherwise sign in through forward-auth or create the user again. A
-  restored token record is informational only — it cannot authenticate, and
-  re-importing one does not attempt to.
+- Images and logos are not in the archive. Rendered code images and uploaded logos are
+  blobs that live in the blob store and must be restored from a copy of it. Until they
+  are, a restored code's image URL returns 404; its redirect keeps working.
+- User passwords and API token secrets are never written to an export. A restored
+  instance keeps the users from the archive, but local users have no password after
+  import and there is no password-reset command: sign in through forward-auth or
+  create the user again. A restored token record is informational only — it cannot
+  authenticate, and re-importing one does not attempt to.
 - `import` refuses to run against a store that already has users, unless you pass
   `--force` — it's an "into a fresh instance" tool, not a merge tool.
 
