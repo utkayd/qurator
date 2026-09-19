@@ -1,6 +1,7 @@
 {
   "name": "qurator-browser-tests",
   "private": true,
+  "license": "MIT",
   "scripts": {
     "test": "playwright test"
   },
