@@ -285,8 +285,10 @@ func itClient() *http.Client {
 }
 
 // itSession drives the HTTP API of one running process, authenticating with a session
-// cookie. The cookie is Secure, so Go's cookie jar would refuse to send it over plain
-// http; we attach it by hand instead.
+// cookie. The cookie is Secure unless QURATOR_SERVER_BASE_URL is an http:// origin, and
+// Go's cookie jar refuses to send a Secure cookie over plain http (except to loopback,
+// which it treats as secure like browsers do); we attach it by hand instead so the
+// helper works regardless of the scheme a test configured.
 type itSession struct {
 	t      *testing.T
 	base   string
