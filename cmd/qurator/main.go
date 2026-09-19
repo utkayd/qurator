@@ -5,12 +5,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -79,11 +81,42 @@ func main() {
 	defer stop()
 	if err := run(ctx, os.Args[1:], os.LookupEnv, os.Stdout); err != nil {
 		fmt.Fprintln(os.Stderr, "qurator:", err)
-		os.Exit(1)
+		os.Exit(exitCode(err))
 	}
 }
 
-func run(ctx context.Context, args []string, lookupEnv func(string) (string, bool), stdout *os.File) error {
+// errUsage marks a command-line mistake (unknown subcommand). main exits 2 for it,
+// the conventional usage-error status, so scripts can tell a typo from a runtime
+// failure.
+var errUsage = errors.New("usage error")
+
+// usageError carries a clean message while still matching errUsage via errors.Is.
+type usageError struct{ msg string }
+
+func (e usageError) Error() string      { return e.msg }
+func (usageError) Is(target error) bool { return target == errUsage }
+
+// exitCode maps a run error to the process exit status.
+func exitCode(err error) int {
+	if errors.Is(err, errUsage) {
+		return 2
+	}
+	return 1
+}
+
+// subcommands is the summary printed above the flag list by --help and named by the
+// unknown-subcommand error. Keep it in step with the switch in run.
+const subcommands = `Usage:
+  qurator [flags]                          start the server
+  qurator export --out <file|dir>          write a portable archive of the store
+  qurator import --in <file|dir> [--force] restore an archive into an empty store
+  qurator healthcheck [--live] [flags]     probe the local server (readiness, or liveness with --live)
+  qurator --version                        print the version
+
+Flags:
+`
+
+func run(ctx context.Context, args []string, lookupEnv func(string) (string, bool), stdout io.Writer) error {
 	for _, a := range args {
 		if a == "--version" || a == "-v" {
 			_, err := fmt.Fprintln(stdout, "qurator", version)
@@ -98,6 +131,15 @@ func run(ctx context.Context, args []string, lookupEnv func(string) (string, boo
 			return runImport(ctx, args[1:], lookupEnv, stdout)
 		case "healthcheck":
 			return runHealthcheck(args[1:], lookupEnv, stdout)
+		}
+		if !strings.HasPrefix(args[0], "-") {
+			return usageError{fmt.Sprintf("unknown command %q (expected export, import, or healthcheck; run qurator --help)", args[0])}
+		}
+	}
+	for _, a := range args {
+		if a == "--help" || a == "-h" {
+			_, err := fmt.Fprint(stdout, subcommands+config.FlagUsages())
+			return err
 		}
 	}
 

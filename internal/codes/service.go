@@ -78,6 +78,7 @@ var (
 	ErrUnsupportedScheme    = errors.New("codes: unsupported destination scheme")
 	ErrSelfReferential      = errors.New("codes: destination points at this instance's scan path")
 	ErrInvalidDestination   = errors.New("codes: invalid destination")
+	ErrDestinationTooLong   = errors.New("codes: destination too long")
 	ErrAliasInvalid         = errors.New("codes: invalid alias")
 	ErrAliasReserved        = errors.New("codes: alias is reserved")
 	ErrInvalidStyling       = errors.New("codes: invalid styling")
@@ -295,12 +296,22 @@ func LogoBlobKeyFor(id string) string {
 
 // ---- destination validation (FR-011, FR-012) -----------------------------------------
 
-// ValidateDestination applies the self-reference check first and the scheme allow-list
-// second, so a scheme-relative `//host/r/x` is reported for what it is.
+// MaxDestinationLength bounds a destination in bytes. Every scan echoes the
+// destination in a Location header and the console lists it, so an unbounded value
+// (the request body limit alone allows ~64 KB) would bloat both; 2048 is the
+// conventional URL ceiling browsers and proxies honour.
+const MaxDestinationLength = 2048
+
+// ValidateDestination applies the length bound first, then the self-reference check,
+// then the scheme allow-list, so a scheme-relative `//host/r/x` is reported for what
+// it is.
 func (s *Service) ValidateDestination(raw string) error {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return vErr(ErrInvalidDestination, map[string]any{"field": "destination"})
+	}
+	if len(raw) > MaxDestinationLength {
+		return vErr(ErrDestinationTooLong, map[string]any{"field": "destination", "max_length": MaxDestinationLength})
 	}
 	u, err := url.Parse(raw)
 	if err != nil {

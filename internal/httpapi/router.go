@@ -137,7 +137,7 @@ func NewRouter(h Handlers, o Options) http.Handler {
 		}
 	}
 
-	var protectedChain http.Handler = protected
+	var protectedChain http.Handler = jsonNotFound(protected)
 	if o.CSRF != nil {
 		protectedChain = o.CSRF(protectedChain)
 	}
@@ -204,6 +204,37 @@ func NotImplemented() http.Handler {
 		WriteError(w, CodeNotImplemented, "This endpoint is not implemented yet.", map[string]any{"route": r.Pattern})
 	})
 }
+
+// jsonNotFound wraps a mux so an unmatched path answers with the JSON error envelope
+// (FR-044) instead of the ServeMux's plain-text "404 page not found". A matched path
+// with the wrong method is left to the mux, which answers 405 with an Allow header.
+func jsonNotFound(mux *http.ServeMux) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, pattern := mux.Handler(r); pattern != "" {
+			mux.ServeHTTP(w, r)
+			return
+		}
+		// Unmatched: ask the mux whether it would say 404 or 405 without letting it
+		// write to the client.
+		probe := &statusProbe{header: http.Header{}}
+		mux.ServeHTTP(probe, r)
+		if probe.code != http.StatusNotFound {
+			mux.ServeHTTP(w, r)
+			return
+		}
+		WriteError(w, CodeNotFound, "No such endpoint.", nil)
+	})
+}
+
+// statusProbe records only the status code of a response and discards the body.
+type statusProbe struct {
+	header http.Header
+	code   int
+}
+
+func (p *statusProbe) Header() http.Header       { return p.header }
+func (p *statusProbe) WriteHeader(code int)      { p.code = code }
+func (p *statusProbe) Write([]byte) (int, error) { return 0, nil }
 
 // withPattern stamps the registered pattern into the request context so
 // observability.RoutePattern is authoritative regardless of nested muxes.

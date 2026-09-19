@@ -377,6 +377,10 @@ func parseFieldValue(kind fieldKind, raw string) (any, error) {
 // and for parsing --config. One flag is defined per leaf config key, named
 // identically to its koanf path with "." replaced by "-"
 // (e.g. --server-listen).
+// FlagUsages renders the server flag list for --help, one flag per line, so the
+// command can print it beneath its own subcommand summary.
+func FlagUsages() string { return flagSet().FlagUsages() }
+
 func flagSet() *flag.FlagSet {
 	fs := flag.NewFlagSet("qurator", flag.ContinueOnError)
 

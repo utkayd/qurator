@@ -54,6 +54,11 @@ func Open(_ context.Context, dsn string) (store.Store, error) {
 	if err != nil {
 		return nil, err
 	}
+	if p := filePath(dsn); p != "" {
+		if err := ensurePrivateFile(p); err != nil {
+			return nil, err
+		}
+	}
 	w, err := sql.Open("sqlite", full)
 	if err != nil {
 		return nil, fmt.Errorf("sqlite: open writer: %w", err)
@@ -80,7 +85,7 @@ func buildDSN(dsn string) (string, error) {
 	if !strings.HasPrefix(dsn, "file:") {
 		if dsn != ":memory:" {
 			if dir := filepath.Dir(dsn); dir != "." {
-				if err := os.MkdirAll(dir, 0o750); err != nil {
+				if err := os.MkdirAll(dir, 0o700); err != nil {
 					return "", fmt.Errorf("sqlite: create data directory: %w", err)
 				}
 			}
@@ -95,6 +100,47 @@ func buildDSN(dsn string) (string, error) {
 		sep = "&"
 	}
 	return dsn + sep + pragmas, nil
+}
+
+// filePath returns the on-disk path a DSN names, or "" for in-memory databases.
+// A `file:` URI keeps only its path component; a query such as `?mode=memory` means
+// there is no file.
+func filePath(dsn string) string {
+	if dsn == ":memory:" {
+		return ""
+	}
+	if !strings.HasPrefix(dsn, "file:") {
+		return dsn
+	}
+	rest := strings.TrimPrefix(dsn, "file:")
+	if i := strings.IndexByte(rest, '?'); i >= 0 {
+		if strings.Contains(rest[i+1:], "mode=memory") {
+			return ""
+		}
+		rest = rest[:i]
+	}
+	rest = strings.TrimPrefix(rest, "//")
+	if rest == "" || rest == ":memory:" {
+		return ""
+	}
+	return rest
+}
+
+// ensurePrivateFile creates the database file 0600 before the driver opens it (which
+// would otherwise honour the umask, typically yielding 0644) and tightens a
+// pre-existing file to 0600. The database holds password hashes, token hashes and
+// every destination, so it must never be world-readable even inside a 0755 bind
+// mount. SQLite derives the mode of its -wal and -shm companions from this file.
+func ensurePrivateFile(path string) error {
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600) //nolint:gosec // path is the operator's configured DSN
+	if err != nil {
+		return fmt.Errorf("sqlite: create database file: %w", err)
+	}
+	_ = f.Close()
+	if err := os.Chmod(path, 0o600); err != nil {
+		return fmt.Errorf("sqlite: restrict database file mode: %w", err)
+	}
+	return nil
 }
 
 // ---- error translation ----------------------------------------------------------------

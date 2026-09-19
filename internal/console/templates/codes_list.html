@@ -36,7 +36,7 @@
       {{range .Items}}
       <tr class="row-link">
         <td><a class="mono row-anchor" href="/ui/codes/{{.ID}}">{{.ShortCode}}</a></td>
-        <td class="cell-truncate"><span title="{{.Destination}}">{{.Destination}}</span></td>
+        <td class="cell-truncate">{{with listDestination .Destination}}<span title="{{.}}">{{.}}</span>{{end}}</td>
         <td><span class="pill mode-{{codeMode .}}">{{if eq (codeMode .) "direct"}}Direct{{else}}Dynamic{{end}}</span></td>
         <td><span class="pill state-{{.State}}"><span class="dot" aria-hidden="true"></span>{{.State}}</span></td>
         <td class="cell-muted"><time datetime="{{.CreatedAt.Format "2006-01-02T15:04:05Z07:00"}}" title="{{.CreatedAt.Format "2006-01-02 15:04"}}">{{relTime .CreatedAt}}</time></td>
