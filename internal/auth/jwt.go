@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -73,33 +75,49 @@ func (a *Authenticator) verifySession(ctx context.Context, token string) (*domai
 	return u, nil
 }
 
-// SessionCookie builds the cookie carrying a signed session: HttpOnly; Secure;
-// SameSite=Strict; Path=/ and no Domain (host-only, instance-scoped per FR-031).
+// CookieSecureForBaseURL decides the session cookie's Secure attribute from the
+// operator-configured server.base_url: an https origin (or none at all) means Secure;
+// an explicit http:// origin means the operator serves plain HTTP on purpose, and a
+// Secure cookie would be dropped by every browser except on loopback (F03). The scheme
+// comes from configuration only, never from the request's Host or forwarded headers.
+func CookieSecureForBaseURL(baseURL string) bool {
+	u, err := url.Parse(baseURL)
+	if err != nil || baseURL == "" {
+		return true
+	}
+	return !strings.EqualFold(u.Scheme, "http")
+}
+
+// SessionCookie builds the cookie carrying a signed session: HttpOnly; SameSite=Strict;
+// Path=/ and no Domain (host-only, instance-scoped per FR-031); Secure unless the
+// configured base URL is plain http (CookieSecureForBaseURL).
 func (a *Authenticator) SessionCookie(token string, exp time.Time) *http.Cookie {
 	maxAge := int(exp.Sub(a.now()) / time.Second)
 	if maxAge < 1 {
 		maxAge = 1
 	}
-	return &http.Cookie{
+	return &http.Cookie{ //nolint:gosec // Secure is fixed from server.base_url at startup (CookieSecureForBaseURL), not request input
 		Name:     SessionCookieName,
 		Value:    token,
 		Path:     "/",
 		HttpOnly: true,
-		Secure:   true,
+		Secure:   a.cookieSecure,
 		SameSite: http.SameSiteStrictMode,
 		MaxAge:   maxAge,
 		Expires:  exp,
 	}
 }
 
-// ClearSessionCookie returns a cookie that deletes the session cookie.
-func ClearSessionCookie() *http.Cookie {
-	return &http.Cookie{
+// ClearSessionCookie returns a cookie that deletes the session cookie. It carries the
+// same Secure attribute as the session cookie: a plain-http origin cannot set a Secure
+// cookie at all, so a Secure clear would be silently dropped.
+func (a *Authenticator) ClearSessionCookie() *http.Cookie {
+	return &http.Cookie{ //nolint:gosec // Secure mirrors SessionCookie; fixed from server.base_url at startup, not request input
 		Name:     SessionCookieName,
 		Value:    "",
 		Path:     "/",
 		HttpOnly: true,
-		Secure:   true,
+		Secure:   a.cookieSecure,
 		SameSite: http.SameSiteStrictMode,
 		MaxAge:   -1,
 		Expires:  time.Unix(0, 0),

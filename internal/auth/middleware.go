@@ -110,7 +110,7 @@ func (a *Authenticator) reject(w http.ResponseWriter, r *http.Request, err error
 	case errors.Is(err, ErrUnauthorized):
 		if _, hasCookie := r.Cookie(SessionCookieName); hasCookie == nil {
 			// A stale browser session: clear it so the next request is anonymous.
-			http.SetCookie(w, ClearSessionCookie())
+			http.SetCookie(w, a.ClearSessionCookie())
 		}
 		httpapi.WriteError(w, httpapi.CodeUnauthorized, "The presented credential is not valid.", nil)
 	default:

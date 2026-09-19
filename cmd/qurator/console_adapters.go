@@ -242,7 +242,7 @@ func (c consoleAuth) CurrentUser(r *http.Request) (domain.User, bool) {
 }
 
 func (c consoleAuth) SignOut(w http.ResponseWriter, _ *http.Request) {
-	http.SetCookie(w, auth.ClearSessionCookie())
+	http.SetCookie(w, c.a.ClearSessionCookie())
 }
 
 func newConsoleDeps(svc *codes.Service, a *auth.Authenticator, st store.Store) console.Deps {

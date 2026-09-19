@@ -33,6 +33,7 @@ const (
 // AuthOptions configures an Authenticator. Zero values fall back to the defaults above.
 type AuthOptions struct {
 	SigningSecret config.Secret            // HS256 key for session JWTs
+	BaseURL       string                   // server.base_url; its scheme decides the cookie's Secure attribute
 	DevMode       bool                     // allow an empty SigningSecret (ephemeral key)
 	SessionTTL    time.Duration            // session lifetime; default 12h
 	TokenPepper   config.Secret            // optional HMAC pepper for API-token hashes
@@ -50,6 +51,9 @@ type Authenticator struct {
 	sessionTTL time.Duration
 	cacheTTL   time.Duration
 	pepper     []byte
+	// cookieSecure is the session cookie's Secure attribute, fixed at construction
+	// from the configured base URL (see CookieSecureForBaseURL); never per request.
+	cookieSecure bool
 
 	fwdEnabled bool
 	fwdHeader  string
@@ -86,16 +90,17 @@ func New(st store.Store, cfg AuthOptions, now func() time.Time) (*Authenticator,
 		log.Warn("auth: dev_mode with no signing secret; using an ephemeral key — every session is invalidated at restart")
 	}
 	a := &Authenticator{
-		store:      st,
-		now:        now,
-		log:        log,
-		signingKey: key,
-		sessionTTL: cfg.SessionTTL,
-		cacheTTL:   cfg.CacheTTL,
-		pepper:     []byte(cfg.TokenPepper.Reveal()),
-		fwdEnabled: cfg.ForwardAuth.Enabled,
-		fwdHeader:  cfg.ForwardAuth.Header,
-		lastTouch:  map[string]time.Time{},
+		store:        st,
+		now:          now,
+		log:          log,
+		signingKey:   key,
+		sessionTTL:   cfg.SessionTTL,
+		cacheTTL:     cfg.CacheTTL,
+		pepper:       []byte(cfg.TokenPepper.Reveal()),
+		cookieSecure: CookieSecureForBaseURL(cfg.BaseURL),
+		fwdEnabled:   cfg.ForwardAuth.Enabled,
+		fwdHeader:    cfg.ForwardAuth.Header,
+		lastTouch:    map[string]time.Time{},
 	}
 	if a.sessionTTL <= 0 {
 		a.sessionTTL = DefaultSessionTTL

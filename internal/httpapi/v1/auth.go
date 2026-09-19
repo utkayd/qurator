@@ -101,7 +101,7 @@ func (h *AuthHandler) signin(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *AuthHandler) signout(w http.ResponseWriter, r *http.Request) {
-	http.SetCookie(w, auth.ClearSessionCookie())
+	http.SetCookie(w, h.auth.ClearSessionCookie())
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusNoContent)
 }
