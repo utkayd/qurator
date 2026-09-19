@@ -98,14 +98,6 @@ func (h *Handler) requireAuth(next http.HandlerFunc) http.HandlerFunc {
 			http.Redirect(w, r, target, http.StatusFound)
 			return
 		}
-		if r.URL.Query().Get(signedInMarker) == "1" {
-			// The cookie arrived: drop the marker so the address bar and any
-			// bookmark stay clean and cannot trigger the diagnostic later. Sign-in
-			// only ever marks the console index, so the clean target is fixed.
-			w.Header().Set("Cache-Control", "no-store")
-			http.Redirect(w, r, "/ui/", http.StatusFound)
-			return
-		}
 		if !isSafeMethod(r.Method) && r.Header.Get(middleware.CSRFHeader) == "" {
 			h.renderError(w, http.StatusForbidden, "This action requires the console's own interface.")
 			return
@@ -222,8 +214,7 @@ type signInData struct {
 // A successful sign-in redirects to the console with signedInMarker so requireAuth can
 // tell "the browser never stored the cookie" apart from an ordinary anonymous visit,
 // and bounce back to the sign-in page with cookieRejectedMarker, which renders
-// cookieRejectedMessage. When the session did arrive, requireAuth redirects once more
-// to the clean console URL. Browsers drop a Secure cookie on any plain-http origin
+// cookieRejectedMessage. Browsers drop a Secure cookie on any plain-http origin
 // other than loopback (F03), which used to look like a silent failed sign-in.
 const (
 	signedInMarker        = "signed_in"

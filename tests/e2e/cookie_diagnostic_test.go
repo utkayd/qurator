@@ -18,10 +18,10 @@ const cookieRejectedMessage = "Your browser rejected the session cookie. Serve q
 // A successful POST /ui/signin redirects to the console with a marker so the next
 // request can tell "the browser never stored the cookie" apart from "anonymous visit".
 func TestSignInRedirectCarriesMarker(t *testing.T) {
-	srv, _, auth := newTestServer(t)
+	srv, client, auth := newTestServer(t)
 	auth.addUser(domain.User{ID: "usr_1", Email: "owner@example.com"}, "correct horse battery staple")
 
-	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	resp := doRequest(t, client, http.MethodPost, srv.URL+"/ui/signin", url.Values{
 		"email":    {"owner@example.com"},
 		"password": {"correct horse battery staple"},
@@ -36,6 +36,14 @@ func TestSignInRedirectCarriesMarker(t *testing.T) {
 	}
 	if loc.Path != "/ui/" || loc.Query().Get("signed_in") != "1" {
 		t.Fatalf("Location %q, want /ui/?signed_in=1", resp.Header.Get("Location"))
+	}
+	page := doRequest(t, client, http.MethodGet, srv.URL+loc.String(), nil, false, nil)
+	defer func() { _ = page.Body.Close() }()
+	if page.StatusCode != http.StatusOK {
+		t.Fatalf("authenticated marked URL status %d, want 200", page.StatusCode)
+	}
+	if !strings.Contains(readBody(t, page), "owner@example.com") {
+		t.Fatal("authenticated marked URL did not render the console")
 	}
 }
 
