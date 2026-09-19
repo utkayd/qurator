@@ -49,7 +49,7 @@ func TestTokenCreateRejectsPastAndUnparsableExpiry(t *testing.T) {
 	}{
 		{"past", "2020-01-01T00:00", "future"},
 		{"unparsable", "not-a-date", "date and time"},
-		{"now-ish past with seconds", time.Now().UTC().Add(-time.Minute).Format("2006-01-02T15:04:05"), "future"},
+		{"seconds unsupported", "2099-01-01T00:00:00", "date and time"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

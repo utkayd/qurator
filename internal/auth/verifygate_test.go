@@ -1,47 +1,17 @@
 package auth
 
 import (
+	"context"
+	"errors"
+	"github.com/utkayd/qurator/internal/domain"
+	"github.com/utkayd/qurator/internal/store"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/utkayd/qurator/internal/store/storetest"
 )
 
-// TestVerifySlotsCapConcurrency pins the process-wide Argon2id cap (F15): an Authenticator
-// hands out at most VerifySlots verification slots at once, never blocks a caller when
-// they are all taken, and frees a slot when its release is called.
-func TestVerifySlotsCapConcurrency(t *testing.T) {
-	st := storetest.NewMemStore()
-	a, err := New(st, AuthOptions{DevMode: true, VerifySlots: 2}, time.Now)
-	if err != nil {
-		t.Fatal(err)
-	}
-	r1, ok := a.AcquireVerifySlot()
-	if !ok {
-		t.Fatal("slot 1 must be free")
-	}
-	r2, ok := a.AcquireVerifySlot()
-	if !ok {
-		t.Fatal("slot 2 must be free")
-	}
-	if _, ok := a.AcquireVerifySlot(); ok {
-		t.Fatal("slot 3 must be refused: cap is 2")
-	}
-	r1()
-	r3, ok := a.AcquireVerifySlot()
-	if !ok {
-		t.Fatal("slot must be free again after release")
-	}
-	// Releasing twice must not open an extra slot.
-	r1()
-	if _, ok := a.AcquireVerifySlot(); ok {
-		t.Fatal("double release must not widen the cap")
-	}
-	r2()
-	r3()
-}
-
-// TestVerifySlotsDefault pins the default cap so a zero option does not mean "unbounded".
 func TestVerifySlotsDefault(t *testing.T) {
 	st := storetest.NewMemStore()
 	a, err := New(st, AuthOptions{DevMode: true}, time.Now)
@@ -58,6 +28,16 @@ func TestVerifySlotsDefault(t *testing.T) {
 	}
 	if _, ok := a.AcquireVerifySlot(); ok {
 		t.Fatalf("slot %d must be refused under the default cap", DefaultVerifySlots+1)
+	}
+	releases[0]()
+	r, ok := a.AcquireVerifySlot()
+	if !ok {
+		t.Fatal("released slot must be available")
+	}
+	defer r()
+	releases[0]()
+	if _, ok := a.AcquireVerifySlot(); ok {
+		t.Fatal("double release must not widen the cap")
 	}
 	for _, r := range releases {
 		r()
@@ -86,5 +66,48 @@ func TestRevokeSessionsBumpsVersionAndEvictsCache(t *testing.T) {
 	}
 	if err := a.RevokeSessions(ctx, "usr_doesnotexist"); err == nil {
 		t.Fatal("RevokeSessions for an unknown user must fail")
+	}
+}
+
+type pausedUserStore struct {
+	store.Store
+	once   sync.Once
+	read   chan struct{}
+	resume chan struct{}
+}
+
+func (s *pausedUserStore) GetUserByID(ctx context.Context, id string) (*domain.User, error) {
+	u, err := s.Store.GetUserByID(ctx, id)
+	s.once.Do(func() {
+		close(s.read)
+		<-s.resume
+	})
+	return u, err
+}
+
+func TestRevokeSessionsPreventsStaleCacheFill(t *testing.T) {
+	a, st, _ := newTestAuth(t)
+	u := seedUser(t, st, "race@example.com", false)
+	tok, _, err := a.IssueSession(u)
+	if err != nil {
+		t.Fatal(err)
+	}
+	paused := &pausedUserStore{Store: st, read: make(chan struct{}), resume: make(chan struct{})}
+	a.store = paused
+	var resume sync.Once
+	unblock := func() { resume.Do(func() { close(paused.resume) }) }
+	defer unblock()
+	done := make(chan error, 1)
+	go func() { _, err := a.userByID(t.Context(), u.ID); done <- err }()
+	<-paused.read
+	if err := a.RevokeSessions(t.Context(), u.ID); err != nil {
+		t.Fatal(err)
+	}
+	unblock()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.verifySession(t.Context(), tok); !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("session after concurrent revocation: %v, want unauthorized", err)
 	}
 }

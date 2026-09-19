@@ -406,10 +406,15 @@ func TestSignoutInvalidatesEverySession(t *testing.T) {
 // every verification slot is busy, sign-in answers 503 with Retry-After instead of queueing
 // another 64 MiB KDF, and it does so for an unknown email too (no existence oracle).
 func TestSigninVerifyGateSaturated(t *testing.T) {
-	e := newEnvWith(t, func(o *auth.AuthOptions) { o.VerifySlots = 1 })
-	release, ok := e.a.AcquireVerifySlot()
-	if !ok {
-		t.Fatal("first slot must be free")
+	e := newEnv(t)
+	var releases []func()
+	for i := 0; i < auth.DefaultVerifySlots; i++ {
+		release, ok := e.a.AcquireVerifySlot()
+		if !ok {
+			t.Fatalf("slot %d must be free", i+1)
+		}
+		t.Cleanup(release)
+		releases = append(releases, release)
 	}
 	for _, body := range []map[string]string{
 		{"email": adminEmail, "password": password},
@@ -430,7 +435,9 @@ func TestSigninVerifyGateSaturated(t *testing.T) {
 	if rec := e.do(http.MethodPost, "/v1/auth/signin", map[string]string{"email": adminEmail}); rec.Code != http.StatusBadRequest {
 		t.Fatalf("missing password while saturated: %d", rec.Code)
 	}
-	release()
+	for _, release := range releases {
+		release()
+	}
 	if rec := e.do(http.MethodPost, "/v1/auth/signin", map[string]string{"email": adminEmail, "password": password}); rec.Code != http.StatusOK {
 		t.Fatalf("signin after release: %d %s", rec.Code, rec.Body.String())
 	}

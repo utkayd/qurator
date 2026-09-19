@@ -44,7 +44,6 @@ type AuthOptions struct {
 	TokenPepper   config.Secret            // optional HMAC pepper for API-token hashes
 	ForwardAuth   config.ForwardAuthConfig // delegated identity mode
 	CacheTTL      time.Duration            // positive cache TTL; default 30s
-	VerifySlots   int                      // max concurrent password verifications; default 8
 	Logger        *slog.Logger             // default slog.Default()
 }
 
@@ -116,11 +115,7 @@ func New(st store.Store, cfg AuthOptions, now func() time.Time) (*Authenticator,
 	if a.cacheTTL <= 0 {
 		a.cacheTTL = DefaultCacheTTL
 	}
-	slots := cfg.VerifySlots
-	if slots <= 0 {
-		slots = DefaultVerifySlots
-	}
-	a.verifySlots = make(chan struct{}, slots)
+	a.verifySlots = make(chan struct{}, DefaultVerifySlots)
 	if a.fwdHeader == "" {
 		a.fwdHeader = "X-Forwarded-Email"
 	}
@@ -163,10 +158,11 @@ func (a *Authenticator) AcquireVerifySlot() (release func(), ok bool) {
 // ttlCache is a small positive cache: entries are only ever written after a successful
 // verification and expire after ttl. It is deliberately not a blacklist (research.md §2).
 type ttlCache[T any] struct {
-	mu      sync.Mutex
-	now     func() time.Time
-	ttl     time.Duration
-	entries map[string]cacheEntry[T]
+	mu         sync.Mutex
+	now        func() time.Time
+	ttl        time.Duration
+	entries    map[string]cacheEntry[T]
+	generation uint64
 }
 
 type cacheEntry[T any] struct {
@@ -197,6 +193,24 @@ func (c *ttlCache[T]) get(key string) (T, bool) {
 func (c *ttlCache[T]) put(key string, val T) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.putLocked(key, val)
+}
+
+func (c *ttlCache[T]) currentGeneration() uint64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.generation
+}
+
+func (c *ttlCache[T]) putIfGeneration(key string, val T, generation uint64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.generation == generation {
+		c.putLocked(key, val)
+	}
+}
+
+func (c *ttlCache[T]) putLocked(key string, val T) {
 	now := c.now()
 	// Opportunistic sweep keeps the map bounded without a background goroutine.
 	if len(c.entries) >= 4096 {
@@ -212,11 +226,13 @@ func (c *ttlCache[T]) put(key string, val T) {
 func (c *ttlCache[T]) evict(key string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.generation++
 	delete(c.entries, key)
 }
 
 func (c *ttlCache[T]) reset() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.generation++
 	c.entries = map[string]cacheEntry[T]{}
 }

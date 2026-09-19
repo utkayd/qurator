@@ -183,10 +183,15 @@ func TestConsoleSignOutInvalidatesSession(t *testing.T) {
 // concurrency cap (F15): with every slot busy the sign-in form answers 503 with
 // Retry-After instead of starting another verification.
 func TestConsoleSignInBusyReturns503(t *testing.T) {
-	ts := newConsoleTestServer(t, func(o *auth.AuthOptions) { o.VerifySlots = 1 })
-	release, ok := ts.authn.AcquireVerifySlot()
-	if !ok {
-		t.Fatal("first slot must be free")
+	ts := newConsoleTestServer(t, nil)
+	var releases []func()
+	for i := 0; i < auth.DefaultVerifySlots; i++ {
+		release, ok := ts.authn.AcquireVerifySlot()
+		if !ok {
+			t.Fatalf("slot %d must be free", i+1)
+		}
+		t.Cleanup(release)
+		releases = append(releases, release)
 	}
 	resp := ts.post("/ui/signin", url.Values{"email": {consoleTestEmail}, "password": {consoleTestPassword}})
 	if resp.StatusCode != http.StatusServiceUnavailable {
@@ -200,6 +205,8 @@ func TestConsoleSignInBusyReturns503(t *testing.T) {
 			t.Fatal("saturated signin must not set a session cookie")
 		}
 	}
-	release()
+	for _, release := range releases {
+		release()
+	}
 	ts.signin()
 }

@@ -587,10 +587,6 @@ func (h *Handler) postTokenCreate(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// tokenExpiryLayouts are the values a datetime-local input submits: minutes, or seconds
-// when the browser includes them.
-var tokenExpiryLayouts = []string{"2006-01-02T15:04", "2006-01-02T15:04:05"}
-
 // parseTokenExpiry applies the same rule as POST /v1/tokens to the console form's
 // optional expiry: empty means no expiry; otherwise it must parse and lie in the future.
 // The value is read as UTC, which is what the form labels the field as. A non-empty msg is
@@ -599,17 +595,14 @@ func parseTokenExpiry(raw string, now time.Time) (*time.Time, string) {
 	if raw == "" {
 		return nil, ""
 	}
-	for _, layout := range tokenExpiryLayouts {
-		t, err := time.Parse(layout, raw)
-		if err != nil {
-			continue
-		}
-		if !t.After(now) {
-			return nil, "The expiry must be in the future."
-		}
-		return &t, ""
+	t, err := time.Parse("2006-01-02T15:04", raw)
+	if err != nil {
+		return nil, "The expiry must be a date and time in the form YYYY-MM-DDTHH:MM (UTC)."
 	}
-	return nil, "The expiry must be a date and time in the form YYYY-MM-DDTHH:MM (UTC)."
+	if !t.After(now) {
+		return nil, "The expiry must be in the future."
+	}
+	return &t, ""
 }
 
 func (h *Handler) deleteToken(w http.ResponseWriter, r *http.Request) {
