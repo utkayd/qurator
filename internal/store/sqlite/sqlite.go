@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -54,7 +55,11 @@ func Open(_ context.Context, dsn string) (store.Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	if p := filePath(dsn); p != "" {
+	p, err := filePath(full)
+	if err != nil {
+		return nil, err
+	}
+	if p != "" {
 		if err := ensurePrivateFile(p); err != nil {
 			return nil, err
 		}
@@ -105,25 +110,28 @@ func buildDSN(dsn string) (string, error) {
 // filePath returns the on-disk path a DSN names, or "" for in-memory databases.
 // A `file:` URI keeps only its path component; a query such as `?mode=memory` means
 // there is no file.
-func filePath(dsn string) string {
-	if dsn == ":memory:" {
-		return ""
+func filePath(dsn string) (string, error) {
+	u, err := url.Parse(dsn)
+	if err != nil {
+		return "", fmt.Errorf("sqlite: parse DSN: %w", err)
 	}
-	if !strings.HasPrefix(dsn, "file:") {
-		return dsn
+	if u.Host != "" && u.Host != "localhost" {
+		return "", fmt.Errorf("sqlite: unsupported file URI authority %q", u.Host)
 	}
-	rest := strings.TrimPrefix(dsn, "file:")
-	if i := strings.IndexByte(rest, '?'); i >= 0 {
-		if strings.Contains(rest[i+1:], "mode=memory") {
-			return ""
+	path := u.Path
+	if u.Opaque != "" {
+		path, err = url.PathUnescape(u.Opaque)
+		if err != nil {
+			return "", fmt.Errorf("sqlite: decode DSN path: %w", err)
 		}
-		rest = rest[:i]
 	}
-	rest = strings.TrimPrefix(rest, "//")
-	if rest == "" || rest == ":memory:" {
-		return ""
+	if strings.ContainsRune(path, 0) {
+		return "", errors.New("sqlite: invalid NUL in DSN path")
 	}
-	return rest
+	if path == ":memory:" || u.Query().Get("mode") == "memory" {
+		return "", nil
+	}
+	return path, nil
 }
 
 // ensurePrivateFile creates the database file 0600 before the driver opens it (which

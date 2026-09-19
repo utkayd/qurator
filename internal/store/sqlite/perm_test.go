@@ -1,6 +1,8 @@
 package sqlite_test
 
 import (
+	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"testing"
@@ -70,5 +72,44 @@ func TestSQLiteDatabaseFileIsPrivate(t *testing.T) {
 	fi, _ = os.Stat(filepath.Dir(nested))
 	if got := fi.Mode().Perm(); got != 0o700 {
 		t.Fatalf("created data directory mode = %04o, want 0700", got)
+	}
+}
+
+func TestSQLiteEncodedURIFileIsPrivate(t *testing.T) {
+	for _, existing := range []bool{false, true} {
+		t.Run(fmt.Sprint(existing), func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.Chmod(dir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(dir, "my db%?#.sqlite")
+			if existing {
+				if err := os.WriteFile(path, nil, 0o644); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Chmod(path, 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			u := url.URL{Scheme: "file", Path: path}
+			s, err := store.Open(t.Context(), "sqlite", u.String())
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = s.Close() })
+			if err := s.Migrate(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			fi, err := os.Stat(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if fi.Size() == 0 || fi.Mode().Perm() != 0o600 {
+				t.Fatalf("database size = %d, mode = %04o", fi.Size(), fi.Mode().Perm())
+			}
+			if _, err := os.Stat(u.EscapedPath()); !os.IsNotExist(err) {
+				t.Fatalf("unexpected encoded filename: %v", err)
+			}
+		})
 	}
 }

@@ -145,6 +145,9 @@ func run(ctx context.Context, args []string, lookupEnv func(string) (string, boo
 
 	cfg, err := config.Load(args, lookupEnv)
 	if err != nil {
+		if errors.Is(err, config.ErrUnexpectedArgument) {
+			return usageError{err.Error() + " (expected export, import, or healthcheck; run qurator --help)"}
+		}
 		return err
 	}
 	logger := observability.NewLogger(cfg.Log.Level, cfg.Log.Format, os.Stderr)

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -32,6 +33,8 @@ import (
 // the injected lookupEnv, which gives identical QURATOR_* precedence
 // semantics while staying fully testable.
 const envPrefix = "QURATOR_"
+
+var ErrUnexpectedArgument = errors.New("unexpected positional argument")
 
 // delim is the koanf path delimiter used for every provider and for
 // struct nesting (posflag/env "_" is translated to this).
@@ -465,6 +468,10 @@ func Load(args []string, lookupEnv func(string) (string, bool)) (*Config, error)
 	fs := flagSet()
 	if err := fs.Parse(args); err != nil {
 		return nil, fmt.Errorf("config: parse flags: %w", err)
+	}
+
+	if fs.NArg() > 0 {
+		return nil, fmt.Errorf("%w: %q", ErrUnexpectedArgument, fs.Arg(0))
 	}
 
 	configPath, _ := fs.GetString("config")
