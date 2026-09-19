@@ -243,18 +243,27 @@ func (h *Handler) postSignIn(w http.ResponseWriter, r *http.Request) {
 	password := r.FormValue("password")
 
 	if _, err := h.deps.Auth.SignIn(r.Context(), w, email, password); err != nil {
-		msg := "Could not sign in."
-		if errors.Is(err, ErrInvalidCredentials) {
+		msg, status := "Could not sign in.", http.StatusUnauthorized
+		switch {
+		case errors.Is(err, ErrInvalidCredentials):
 			msg = "Incorrect email or password."
+		case errors.Is(err, ErrTemporarilyUnavailable):
+			// The verification cap is saturated (see auth.AcquireVerifySlot). Nothing was
+			// checked, so this is not a credential failure: 503 + Retry-After.
+			msg, status = "The server is busy verifying other sign-ins. Try again in a moment.", http.StatusServiceUnavailable
+			w.Header().Set("Retry-After", "1")
 		}
-		h.render(w, r, http.StatusUnauthorized, "signin.html", "Sign in", signInData{Email: email, Error: msg})
+		h.render(w, r, status, "signin.html", "Sign in", signInData{Email: email, Error: msg})
 		return
 	}
 	http.Redirect(w, r, "/ui/?"+signedInMarker+"=1", http.StatusSeeOther)
 }
 
 func (h *Handler) postSignOut(w http.ResponseWriter, r *http.Request) {
-	h.deps.Auth.SignOut(w, r)
+	if err := h.deps.Auth.SignOut(w, r); err != nil {
+		httpapi.Internal(w, r, err)
+		return
+	}
 	redirectAfterMutation(w, r, "/ui/signin")
 }
 
@@ -555,11 +564,11 @@ func (h *Handler) postTokenCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	name := strings.TrimSpace(r.FormValue("name"))
-	var expiresAt *time.Time
-	if v := strings.TrimSpace(r.FormValue("expires_at")); v != "" {
-		if t, err := time.Parse("2006-01-02T15:04", v); err == nil {
-			expiresAt = &t
-		}
+	expiresAt, msg := parseTokenExpiry(strings.TrimSpace(r.FormValue("expires_at")), time.Now())
+	if msg != "" {
+		tokens, _ := h.deps.Tokens.List(r.Context(), user.ID)
+		h.render(w, r, http.StatusBadRequest, "tokens.html", "API tokens", tokensData{Items: tokens, Error: msg})
+		return
 	}
 
 	_, secret, err := h.deps.Tokens.Create(r.Context(), user.ID, name, expiresAt)
@@ -576,6 +585,31 @@ func (h *Handler) postTokenCreate(w http.ResponseWriter, r *http.Request) {
 		Name:   name,
 		Secret: secret,
 	})
+}
+
+// tokenExpiryLayouts are the values a datetime-local input submits: minutes, or seconds
+// when the browser includes them.
+var tokenExpiryLayouts = []string{"2006-01-02T15:04", "2006-01-02T15:04:05"}
+
+// parseTokenExpiry applies the same rule as POST /v1/tokens to the console form's
+// optional expiry: empty means no expiry; otherwise it must parse and lie in the future.
+// The value is read as UTC, which is what the form labels the field as. A non-empty msg is
+// the user-facing form error.
+func parseTokenExpiry(raw string, now time.Time) (*time.Time, string) {
+	if raw == "" {
+		return nil, ""
+	}
+	for _, layout := range tokenExpiryLayouts {
+		t, err := time.Parse(layout, raw)
+		if err != nil {
+			continue
+		}
+		if !t.After(now) {
+			return nil, "The expiry must be in the future."
+		}
+		return &t, ""
+	}
+	return nil, "The expiry must be a date and time in the form YYYY-MM-DDTHH:MM (UTC)."
 }
 
 func (h *Handler) deleteToken(w http.ResponseWriter, r *http.Request) {

@@ -28,6 +28,11 @@ const (
 	DefaultSessionTTL = 12 * time.Hour
 	DefaultCacheTTL   = 30 * time.Second
 	touchInterval     = time.Minute
+	// DefaultVerifySlots caps concurrent Argon2id verifications per process. Each one
+	// pins 64 MiB, so an uncapped burst of sign-in attempts from many peers is a
+	// memory-exhaustion vector the per-peer rate limiter cannot see. 8 slots is 512 MiB
+	// worst case and far more than a single-operator instance ever needs.
+	DefaultVerifySlots = 8
 )
 
 // AuthOptions configures an Authenticator. Zero values fall back to the defaults above.
@@ -39,6 +44,7 @@ type AuthOptions struct {
 	TokenPepper   config.Secret            // optional HMAC pepper for API-token hashes
 	ForwardAuth   config.ForwardAuthConfig // delegated identity mode
 	CacheTTL      time.Duration            // positive cache TTL; default 30s
+	VerifySlots   int                      // max concurrent password verifications; default 8
 	Logger        *slog.Logger             // default slog.Default()
 }
 
@@ -61,6 +67,8 @@ type Authenticator struct {
 
 	tokens *ttlCache[*domain.APIToken] // positive cache keyed by token ID
 	users  *ttlCache[*domain.User]     // positive cache keyed by user ID
+
+	verifySlots chan struct{} // semaphore bounding concurrent Argon2id verifications
 
 	touchMu   sync.Mutex
 	lastTouch map[string]time.Time
@@ -108,6 +116,11 @@ func New(st store.Store, cfg AuthOptions, now func() time.Time) (*Authenticator,
 	if a.cacheTTL <= 0 {
 		a.cacheTTL = DefaultCacheTTL
 	}
+	slots := cfg.VerifySlots
+	if slots <= 0 {
+		slots = DefaultVerifySlots
+	}
+	a.verifySlots = make(chan struct{}, slots)
 	if a.fwdHeader == "" {
 		a.fwdHeader = "X-Forwarded-Email"
 	}
@@ -130,6 +143,22 @@ func New(st store.Store, cfg AuthOptions, now func() time.Time) (*Authenticator,
 
 // SessionTTL reports the configured session lifetime.
 func (a *Authenticator) SessionTTL() time.Duration { return a.sessionTTL }
+
+// AcquireVerifySlot reserves one of the bounded password-verification slots without
+// waiting. ok is false when every slot is busy; the caller must then answer 503 with
+// Retry-After rather than queue, so a flood of sign-in attempts cannot pile up Argon2id
+// work (64 MiB each) without bound. On success the returned release frees the slot and is
+// safe to call more than once. Both sign-in surfaces (API and console) share one
+// Authenticator, so the cap is process-wide.
+func (a *Authenticator) AcquireVerifySlot() (release func(), ok bool) {
+	select {
+	case a.verifySlots <- struct{}{}:
+	default:
+		return nil, false
+	}
+	var once sync.Once
+	return func() { once.Do(func() { <-a.verifySlots }) }, true
+}
 
 // ttlCache is a small positive cache: entries are only ever written after a successful
 // verification and expire after ttl. It is deliberately not a blacklist (research.md §2).
@@ -178,6 +207,12 @@ func (c *ttlCache[T]) put(key string, val T) {
 		}
 	}
 	c.entries[key] = cacheEntry[T]{val: val, exp: now.Add(c.ttl)}
+}
+
+func (c *ttlCache[T]) evict(key string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.entries, key)
 }
 
 func (c *ttlCache[T]) reset() {

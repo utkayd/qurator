@@ -34,7 +34,8 @@ curl -fsS localhost:8080/readyz    # 200 once its own storage is reachable
 
 The default start creates storage and a signing key. Sign-in needs the configured
 bootstrap account; it does not create a default password or enable public generation.
-On the first start with an empty user store, supply both bootstrap values:
+On the first start with an empty user store, supply both bootstrap values (the password
+must be at least 12 characters):
 
 ```bash
 QURATOR_AUTH_BOOTSTRAP_EMAIL='admin@example.com' \

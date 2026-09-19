@@ -62,6 +62,16 @@ func (h *AuthHandler) signin(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Cache-Control", "no-store")
 
+	// Every path below burns exactly one Argon2id verification, so the slot is taken
+	// before the lookup: a saturated instance answers 503 for known and unknown emails
+	// alike and never becomes an existence oracle.
+	release, free := h.auth.AcquireVerifySlot()
+	if !free {
+		writeServiceBusy(w)
+		return
+	}
+	defer release()
+
 	// Uniform failure: unknown email, password-less (forward-auth) account, and wrong
 	// password all cost one Argon2 verification and return the same 401.
 	unauthorized := func() {
@@ -100,7 +110,25 @@ func (h *AuthHandler) signin(w http.ResponseWriter, r *http.Request) {
 	httpapi.WriteJSON(w, http.StatusOK, toUserJSON(u))
 }
 
+// verifyRetryAfter is the Retry-After hint when every verification slot is busy. One
+// verification takes tens of milliseconds, so a slot frees well within a second.
+const verifyRetryAfter = "1"
+
+func writeServiceBusy(w http.ResponseWriter) {
+	w.Header().Set("Retry-After", verifyRetryAfter)
+	httpapi.WriteError(w, httpapi.CodeServiceBusy, "Too many sign-in attempts are being verified right now; retry shortly.", map[string]any{"retry_after_s": 1})
+}
+
+// signout ends every session of the caller, not just the presented one: the user's
+// token_version is bumped so any copy of the cookie is refused from now on, and then the
+// browser's cookie is cleared. Clearing alone would leave a leaked cookie valid until
+// expiry.
 func (h *AuthHandler) signout(w http.ResponseWriter, r *http.Request) {
+	id, _ := auth.IdentityFrom(r.Context())
+	if err := h.auth.RevokeSessions(r.Context(), id.UserID); err != nil {
+		httpapi.Internal(w, r, err)
+		return
+	}
 	http.SetCookie(w, h.auth.ClearSessionCookie())
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusNoContent)

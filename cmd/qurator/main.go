@@ -204,14 +204,14 @@ func run(ctx context.Context, args []string, lookupEnv func(string) (string, boo
 	if err != nil {
 		return fmt.Errorf("auth: %w", err)
 	}
-	if cfg.Auth.BootstrapEmail != "" {
-		created, err := auth.Bootstrap(ctx, st, cfg.Auth.BootstrapEmail, cfg.Auth.BootstrapPassword.Reveal())
-		if err != nil {
-			return fmt.Errorf("bootstrap admin: %w", err)
-		}
-		if created {
-			slog.Info("bootstrap admin created", "email", cfg.Auth.BootstrapEmail)
-		}
+	// Always consult Bootstrap: with users present it is a no-op, and with none and no
+	// credentials configured it is what warns the operator that nobody can sign in.
+	created, err := auth.Bootstrap(ctx, st, cfg.Auth.BootstrapEmail, cfg.Auth.BootstrapPassword.Reveal())
+	if err != nil {
+		return fmt.Errorf("bootstrap admin: %w", err)
+	}
+	if created {
+		slog.Info("bootstrap admin created", "email", cfg.Auth.BootstrapEmail)
 	}
 	identity := func(r *http.Request) (string, bool) {
 		id, ok := auth.IdentityFrom(r.Context())

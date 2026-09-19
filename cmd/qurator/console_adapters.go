@@ -204,6 +204,13 @@ type consoleAuth struct {
 
 func (c consoleAuth) SignIn(ctx context.Context, w http.ResponseWriter, email, password string) (domain.User, error) {
 	email = strings.TrimSpace(email)
+	// Same process-wide Argon2id cap as POST /v1/auth/signin; taken before the lookup so a
+	// saturated instance answers identically for known and unknown emails.
+	release, free := c.a.AcquireVerifySlot()
+	if !free {
+		return domain.User{}, console.ErrTemporarilyUnavailable
+	}
+	defer release()
 	u, err := c.st.GetUserByEmail(ctx, email)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
@@ -243,8 +250,18 @@ func (c consoleAuth) CurrentUser(r *http.Request) (domain.User, bool) {
 	return *u, true
 }
 
-func (c consoleAuth) SignOut(w http.ResponseWriter, _ *http.Request) {
+// SignOut ends every session of the caller (token_version bump; see
+// auth.RevokeSessions) and then clears the browser cookie. If the bump fails the cookie is
+// left alone and the error surfaces, so the user is never told they are signed out while
+// their cookie still works.
+func (c consoleAuth) SignOut(w http.ResponseWriter, r *http.Request) error {
+	if id, ok := auth.IdentityFrom(r.Context()); ok {
+		if err := c.a.RevokeSessions(r.Context(), id.UserID); err != nil {
+			return err
+		}
+	}
 	http.SetCookie(w, c.a.ClearSessionCookie())
+	return nil
 }
 
 func newConsoleDeps(svc *codes.Service, a *auth.Authenticator, st store.Store) console.Deps {
