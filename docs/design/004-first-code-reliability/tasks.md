@@ -1,7 +1,7 @@
 # Tasks: First-code reliability
 
 ## Setup
-- [x] T001 Write spec, clarification decisions, design and Constitution Check in `specs/004-first-code-reliability/`.
+- [x] T001 Write spec, clarification decisions, design and Constitution Check in `docs/design/004-first-code-reliability/`.
 - [x] T002 Add isolated browser tooling and fixtures in `tests/browser/`.
 
 ## US1 — Printed-code correctness
@@ -19,6 +19,6 @@
 
 ## Cross-cutting completion
 - [x] T010 Update README, error/OpenAPI contracts, `CODEBASE_REVIEW.md`, and browser CI workflow.
-- [x] T011 Run focused/full Go tests, race tests, static build, vet, format and lint; record results in `specs/004-first-code-reliability/validation.md`.
+- [x] T011 Run focused/full Go tests, race tests, static build, vet, format and lint; record results in `docs/design/004-first-code-reliability/validation.md`.
 
 Dependencies: T001 → T002; T003 → T004; T005 → T006; T002 → T007 → T008 → T009; all → T010 → T011. US1 and US2 tests are independent; execute locally in sequence to simplify review. No parallel implementation agents are needed. Each fix starts with a failing test; complete the whole authorized milestone rather than stopping at an MVP.

@@ -4,7 +4,7 @@ description: "Task list for qurator v1 — three-stage delivery with six paralle
 
 # Tasks: qurator v1 — Self-Hostable QR Service
 
-**Input**: Design documents from `/specs/001-qr-service-baseline/`
+**Input**: Design documents from `/docs/design/001-qr-service-baseline/`
 **Prerequisites**: plan.md, spec.md, research.md, data-model.md, contracts/, quickstart.md
 
 **Tests**: Per Constitution Principle VII (Test-First For Contracts, NON-NEGOTIABLE), test
@@ -344,7 +344,7 @@ architectures.
 - [x] T106 (Stream 0) Write `tests/integration/privacy_test.go` — after 1,000 scans, dump every table on both backends and assert no value matches an IPv4/IPv6 pattern and no column name contains `ip`, `addr`, `geo`, `country` (SC-012)
 - [x] T107 (Stream 0) Write `tests/integration/stall_test.go` — swap in a `Store` whose `InsertScanBatch` blocks forever; run 10,000 redirects with `hey`-equivalent in-process load; assert p99 < 50ms and `qurator_scan_events_dropped_total` > 0 (SC-005, Principle IV)
 - [x] T108 (Stream 0) Write `tests/integration/zeroconfig_test.go` — `exec` the built binary with `env -i PATH=...` in a temp dir, assert it serves `/healthz` and `/v1/qr` (with dev mode? NO — assert it REFUSES with the signing-secret message, then passes with `QURATOR_DEV_MODE=1`) (SC-002, FR-040)
-- [x] T109 (Stream 0) Execute every scenario in `quickstart.md` by hand against the merged build on SQLite+fs, then via `deploy/compose.yaml` on Postgres+S3; record results in `specs/001-qr-service-baseline/checklists/quickstart-results.md`
+- [x] T109 (Stream 0) Execute every scenario in `quickstart.md` by hand against the merged build on SQLite+fs, then via `deploy/compose.yaml` on Postgres+S3; record results in `docs/design/001-qr-service-baseline/checklists/quickstart-results.md`
 - [x] T110 (Stream 0) Run `/speckit-analyze` for cross-artifact consistency, then `/security-review` on the branch; fix findings; ensure `make build test lint bench` green and `tests/arch` green
 - [x] T111 (Stream 0) Open the PR to `main` with the quickstart results linked; tag `v1.0.0-rc1` after merge and confirm `release.yml` publishes a multi-arch image that runs as non-root
 - [x] T112 (Stream 0) Add BenchmarkRedirectWarm/Cold in internal/httpapi/public/bench_test.go and gate them in .github/workflows/bench.yml (analysis C2)

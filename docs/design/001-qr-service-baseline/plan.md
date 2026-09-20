@@ -2,7 +2,7 @@
 
 **Branch**: `001-qr-service-baseline` | **Date**: 2026-09-04 | **Spec**: [spec.md](./spec.md)
 
-**Input**: Feature specification from `/specs/001-qr-service-baseline/spec.md`
+**Input**: Feature specification from `/docs/design/001-qr-service-baseline/spec.md`
 
 **Constitution**: v1.0.1 — amended during Phase 0, see Constitution Check below.
 
@@ -222,7 +222,7 @@ amendment; the rest hold as designed.
 ### Documentation (this feature)
 
 ```text
-specs/001-qr-service-baseline/
+docs/design/001-qr-service-baseline/
 ├── plan.md              # This file
 ├── spec.md              # Feature specification
 ├── research.md          # Phase 0 output
