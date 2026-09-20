@@ -3,6 +3,7 @@ package v1
 import (
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -110,13 +111,9 @@ func (h *AuthHandler) signin(w http.ResponseWriter, r *http.Request) {
 	httpapi.WriteJSON(w, http.StatusOK, toUserJSON(u))
 }
 
-// verifyRetryAfter is the Retry-After hint when every verification slot is busy. One
-// verification takes tens of milliseconds, so a slot frees well within a second.
-const verifyRetryAfter = "1"
-
 func writeServiceBusy(w http.ResponseWriter) {
-	w.Header().Set("Retry-After", verifyRetryAfter)
-	httpapi.WriteError(w, httpapi.CodeServiceBusy, "Too many sign-in attempts are being verified right now; retry shortly.", map[string]any{"retry_after_s": 1})
+	w.Header().Set("Retry-After", strconv.Itoa(httpapi.ServiceBusyRetryAfterSeconds))
+	httpapi.WriteError(w, httpapi.CodeServiceBusy, "Too many sign-in attempts are being verified right now; retry shortly.", map[string]any{"retry_after_s": httpapi.ServiceBusyRetryAfterSeconds})
 }
 
 // signout ends every session of the caller, not just the presented one: the user's

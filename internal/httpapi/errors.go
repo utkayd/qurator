@@ -40,6 +40,10 @@ const (
 	CodeNotImplemented             ErrorCode = "not_implemented" // foundation stubs only
 )
 
+// ServiceBusyRetryAfterSeconds is the Retry-After hint sent with CodeServiceBusy. One
+// password verification takes tens of milliseconds, so a slot frees well within a second.
+const ServiceBusyRetryAfterSeconds = 1
+
 // Status returns the HTTP status conventionally paired with a code.
 func (c ErrorCode) Status() int {
 	switch c {

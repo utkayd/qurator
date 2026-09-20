@@ -251,7 +251,7 @@ func (h *Handler) postSignIn(w http.ResponseWriter, r *http.Request) {
 			// The verification cap is saturated (see auth.AcquireVerifySlot). Nothing was
 			// checked, so this is not a credential failure: 503 + Retry-After.
 			msg, status = "The server is busy verifying other sign-ins. Try again in a moment.", http.StatusServiceUnavailable
-			w.Header().Set("Retry-After", "1")
+			w.Header().Set("Retry-After", strconv.Itoa(httpapi.ServiceBusyRetryAfterSeconds))
 		}
 		h.render(w, r, status, "signin.html", "Sign in", signInData{Email: email, Error: msg})
 		return
