@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/utkayd/qurator/internal/blob"
 	"github.com/utkayd/qurator/internal/domain"
@@ -296,7 +297,7 @@ func LogoBlobKeyFor(id string) string {
 
 // ---- destination validation (FR-011, FR-012) -----------------------------------------
 
-// MaxDestinationLength bounds a destination in bytes. Every scan echoes the
+// MaxDestinationLength bounds a destination in Unicode characters. Every scan echoes the
 // destination in a Location header and the console lists it, so an unbounded value
 // (the request body limit alone allows ~64 KB) would bloat both; 2048 is the
 // conventional URL ceiling browsers and proxies honour.
@@ -310,7 +311,7 @@ func (s *Service) ValidateDestination(raw string) error {
 	if raw == "" {
 		return vErr(ErrInvalidDestination, map[string]any{"field": "destination"})
 	}
-	if len(raw) > MaxDestinationLength {
+	if utf8.RuneCountInString(raw) > MaxDestinationLength {
 		return vErr(ErrDestinationTooLong, map[string]any{"field": "destination", "max_length": MaxDestinationLength})
 	}
 	u, err := url.Parse(raw)

@@ -303,6 +303,13 @@ func TestCodes_DestinationValidation(t *testing.T) {
 	}
 	atCap := "https://example.com/" + strings.Repeat("a", codes.MaxDestinationLength-len("https://example.com/"))
 	f.create(t, "alice", map[string]any{"destination": atCap})
+	// The cap counts characters, not bytes: a multi-byte destination at the cap is
+	// accepted even though it exceeds the cap in bytes.
+	multiByte := "https://example.com/" + strings.Repeat("é", codes.MaxDestinationLength-len("https://example.com/"))
+	if len(multiByte) <= codes.MaxDestinationLength {
+		t.Fatalf("multi-byte fixture must exceed the cap in bytes, got %d", len(multiByte))
+	}
+	f.create(t, "alice", map[string]any{"destination": multiByte})
 	// PATCH goes through the same validator.
 	created := f.create(t, "alice", map[string]any{"destination": "https://example.com/"})
 	res, body = f.do(t, "alice", http.MethodPatch, "/v1/codes/"+created["id"].(string), map[string]any{"destination": long}, nil)
