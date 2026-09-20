@@ -37,7 +37,7 @@ type consoleTestServer struct {
 	client *http.Client
 }
 
-func newConsoleTestServer(t *testing.T, tune func(*auth.AuthOptions)) *consoleTestServer {
+func newConsoleTestServer(t *testing.T) *consoleTestServer {
 	t.Helper()
 	ctx := context.Background()
 	st := storetest.NewMemStore()
@@ -45,11 +45,7 @@ func newConsoleTestServer(t *testing.T, tune func(*auth.AuthOptions)) *consoleTe
 	if _, err := auth.Bootstrap(ctx, st, consoleTestEmail, consoleTestPassword); err != nil {
 		t.Fatal(err)
 	}
-	opts := auth.AuthOptions{DevMode: true, SessionTTL: time.Hour}
-	if tune != nil {
-		tune(&opts)
-	}
-	authn, err := auth.New(st, opts, time.Now)
+	authn, err := auth.New(st, auth.AuthOptions{DevMode: true, SessionTTL: time.Hour}, time.Now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +98,7 @@ func (c *consoleTestServer) sessionCookie() *http.Cookie {
 // escaped: the console posted mode=direct and the adapter silently made a dynamic code.
 func TestConsoleCreatePreservesMode(t *testing.T) {
 	ctx := context.Background()
-	ts := newConsoleTestServer(t, nil)
+	ts := newConsoleTestServer(t)
 	st := ts.st
 	post := ts.post
 	ts.signin()
@@ -142,7 +138,7 @@ func TestConsoleCreatePreservesMode(t *testing.T) {
 // /ui/signout the cookie the browser held is refused server-side even if it is replayed,
 // because the user's token_version was bumped — not merely because the browser dropped it.
 func TestConsoleSignOutInvalidatesSession(t *testing.T) {
-	ts := newConsoleTestServer(t, nil)
+	ts := newConsoleTestServer(t)
 	ts.signin()
 	old := ts.sessionCookie()
 
@@ -183,7 +179,7 @@ func TestConsoleSignOutInvalidatesSession(t *testing.T) {
 // concurrency cap (F15): with every slot busy the sign-in form answers 503 with
 // Retry-After instead of starting another verification.
 func TestConsoleSignInBusyReturns503(t *testing.T) {
-	ts := newConsoleTestServer(t, nil)
+	ts := newConsoleTestServer(t)
 	var releases []func()
 	for i := 0; i < auth.DefaultVerifySlots; i++ {
 		release, ok := ts.authn.AcquireVerifySlot()

@@ -40,19 +40,11 @@ type env struct {
 
 func newEnv(t *testing.T) *env {
 	t.Helper()
-	return newEnvWith(t, func(*auth.AuthOptions) {})
-}
-
-// newEnvWith builds the env after letting the caller adjust the Authenticator options.
-func newEnvWith(t *testing.T, tune func(*auth.AuthOptions)) *env {
-	t.Helper()
 	st := storetest.NewMemStore()
-	opts := auth.AuthOptions{
+	a, err := auth.New(st, auth.AuthOptions{
 		SigningSecret: config.Secret("contract-test-signing-secret"),
 		SessionTTL:    12 * time.Hour,
-	}
-	tune(&opts)
-	a, err := auth.New(st, opts, time.Now)
+	}, time.Now)
 	if err != nil {
 		t.Fatal(err)
 	}
