@@ -33,7 +33,7 @@ const (
 	userHeader  = "X-Test-User" // stands in for the auth middleware's identity
 )
 
-// fakeRenderer stands in for Stream A's renderer: a deterministic PNG-ish payload that
+// fakeRenderer stands in for internal/qr's renderer: a deterministic PNG-ish payload that
 // embeds the content so a test can prove the encoded value is the scan URL.
 type fakeRenderer struct{}
 
