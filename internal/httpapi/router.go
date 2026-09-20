@@ -137,7 +137,7 @@ func NewRouter(h Handlers, o Options) http.Handler {
 		}
 	}
 
-	var protectedChain http.Handler = jsonNotFound(protected)
+	protectedChain := jsonNotFound(protected)
 	if o.CSRF != nil {
 		protectedChain = o.CSRF(protectedChain)
 	}

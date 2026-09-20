@@ -50,8 +50,8 @@ var templateFuncs = template.FuncMap{
 }
 
 // listDestinationMax bounds how much of a destination the codes list shows. The API
-// caps destinations at 2048 bytes, which is still far more than a table cell can use;
-// the detail page shows the full value.
+// caps destinations at codes.MaxDestinationLength characters, which is still far more
+// than a table cell can use; the detail page shows the full value.
 const listDestinationMax = 120
 
 func listDestination(s string) string { return truncate(s, listDestinationMax) }

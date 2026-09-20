@@ -1725,9 +1725,11 @@ components:
         destination:
           type: string
           format: uri
+          maxLength: 2048
           description: |
-            Must use a permitted scheme (default: `http`, `https` only; FR-011) and must not
-            resolve back to this instance's own `/r/` path (FR-012).
+            Must use a permitted scheme (default: `http`, `https` only; FR-011), must not
+            resolve back to this instance's own `/r/` path (FR-012), and is capped at 2048
+            characters (`invalid_request` with `max_length` in details).
         alias:
           allOf:
             - $ref: '#/components/schemas/ShortCode'
@@ -1745,7 +1747,8 @@ components:
         destination:
           type: string
           format: uri
-          description: Re-validated against the scheme allow-list and self-referential-destination check on every update (FR-011).
+          maxLength: 2048
+          description: Re-validated against the length cap, scheme allow-list and self-referential-destination check on every update (FR-011).
 
     CodePage:
       type: object

@@ -85,7 +85,8 @@ func main() {
 	}
 }
 
-// errUsage marks a command-line mistake (unknown subcommand). main exits 2 for it,
+// errUsage marks a command-line mistake (unknown subcommand or a stray positional
+// argument after the flags). main exits 2 for it,
 // the conventional usage-error status, so scripts can tell a typo from a runtime
 // failure.
 var errUsage = errors.New("usage error")
