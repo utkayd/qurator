@@ -33,4 +33,4 @@ tests/browser/playwright-report/
 
 # Export archives written by `qurator export --out ./dump/`
 /dump/
-*.tar
+/export.tar
