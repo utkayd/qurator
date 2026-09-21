@@ -26,13 +26,15 @@ jobs:
       QURATOR_TEST_S3_ACCESS_KEY: qurator
       QURATOR_TEST_S3_SECRET_KEY: qurator-dev-secret
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+    # quay.io is MinIO's registry; the Docker Hub minio/minio repository no longer
+    # exists. The digest is the index this workflow last pulled as minio/minio:latest.
     - name: 'Start MinIO (services: cannot pass the required `server` argument)'
-      run: 'docker run -d --name minio -p 9000:9000 -e MINIO_ROOT_USER=qurator -e MINIO_ROOT_PASSWORD=qurator-dev-secret minio/minio
+      run: 'docker run -d --name minio -p 9000:9000 -e MINIO_ROOT_USER=qurator -e MINIO_ROOT_PASSWORD=qurator-dev-secret quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e
         server /data
 
         for i in $(seq 1 30); do curl -fsS http://127.0.0.1:9000/minio/health/live && break; sleep 1; done'
-    - uses: actions/setup-go@v5
+    - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
       with:
         go-version-file: go.mod
     - name: Wait for MinIO bucket readiness
