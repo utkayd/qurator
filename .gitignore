@@ -30,3 +30,7 @@ node_modules/
 tests/browser/.bin/
 tests/browser/test-results/
 tests/browser/playwright-report/
+
+# Export archives written by `qurator export --out ./dump/`
+/dump/
+/export.tar

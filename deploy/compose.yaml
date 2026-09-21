@@ -24,7 +24,14 @@ services:
       QURATOR_BLOB_S3_SECRET_KEY: qurator-dev-secret
       QURATOR_BLOB_S3_USE_SSL: "false"
       QURATOR_BLOB_S3_PATH_STYLE: "true"
-      QURATOR_AUTH_DEV_MODE: "true"
+      # Replace these before first start: the bootstrap account is created once, on the
+      # first run against an empty database, and the base URL is what printed codes
+      # point at.
+      QURATOR_AUTH_BOOTSTRAP_EMAIL: admin@example.com
+      QURATOR_AUTH_BOOTSTRAP_PASSWORD: replace-with-your-own-long-password
+      QURATOR_SERVER_BASE_URL: http://localhost:8080
+    volumes:
+      - qurator-data:/data
     depends_on:
       postgres:
         condition: service_healthy
@@ -89,5 +96,6 @@ services:
         echo "export QURATOR_TEST_S3_ENDPOINT=$$QURATOR_TEST_S3_ENDPOINT"
 
 volumes:
+  qurator-data:
   qurator-postgres-data:
   qurator-minio-data:
