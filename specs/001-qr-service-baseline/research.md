@@ -179,8 +179,12 @@ bounds output dimensions and render duration (FR-029). All four are qurator's ow
 
 ### Decision: cookie attributes
 
-`HttpOnly; Secure; SameSite=Strict; Path=/`, no `Domain` (host-only, so the cookie is
-instance-scoped per FR-031).
+`HttpOnly; SameSite=Strict; Path=/`, no `Domain` (host-only, so the cookie is
+instance-scoped per FR-031). `Secure` follows the `server.base_url` scheme, decided once
+at startup and never from request headers: `https://` or unset means `Secure`; an
+explicit `http://` origin drops it, because browsers discard a `Secure` cookie on any
+plain-http origin other than loopback. The clearing cookie mirrors the same attribute.
+See `CookieSecureForBaseURL` in `internal/auth/jwt.go`.
 
 - **Rationale**: `SameSite=Strict` does not cover every same-site edge case and does not
   apply to Bearer auth at all — CSRF is a cookie-only problem. A required custom header on

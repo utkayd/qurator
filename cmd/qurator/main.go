@@ -149,6 +149,7 @@ func run(ctx context.Context, args []string, lookupEnv func(string) (string, boo
 	// Identity (Stream C).
 	authn, err := auth.New(st, auth.AuthOptions{
 		SigningSecret: cfg.Auth.SigningSecret,
+		BaseURL:       cfg.Server.BaseURL,
 		DevMode:       cfg.Auth.DevMode,
 		SessionTTL:    cfg.Auth.SessionTTL,
 		ForwardAuth:   cfg.ForwardAuth,

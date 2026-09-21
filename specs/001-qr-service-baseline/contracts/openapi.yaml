@@ -1179,8 +1179,9 @@ components:
       in: cookie
       name: qurator_session
       description: |
-        An HttpOnly, `Secure`, `SameSite=Strict` session cookie set by `POST /v1/auth/signin`,
-        restricted to this instance's origin. State-changing operations authenticated this
+        An HttpOnly, `SameSite=Strict` session cookie set by `POST /v1/auth/signin`,
+        restricted to this instance's origin. It is `Secure` unless `server.base_url`
+        is an explicit `http://` origin. State-changing operations authenticated this
         way MUST also carry the `X-Qurator-Requested-With` header (see the `CsrfHeader`
         parameter) as a same-origin assertion.
 

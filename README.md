@@ -45,6 +45,13 @@ Open `http://localhost:8080/ui/` and sign in with those credentials. Once the ac
 exists, bootstrap settings do not recreate it or reset its password. For persistent
 deployments, supply secrets through your normal protected environment/config mechanism.
 
+The session cookie is marked `Secure` unless `QURATOR_SERVER_BASE_URL` is an `http://`
+origin. Browsers only accept a `Secure` cookie over HTTPS or on localhost, so to reach
+the console over plain HTTP from another machine (a LAN IP, `nas.local`, a VPS by
+address) set `QURATOR_SERVER_BASE_URL` to that exact `http://` origin; otherwise serve
+qurator over HTTPS. If the cookie is rejected, the sign-in page says so instead of
+silently returning to the form.
+
 Before printing dynamic codes, set `QURATOR_SERVER_BASE_URL` to the address scanners
 can reach, such as `https://qr.example.com`. **A phone cannot reach your server through
 its own localhost address.** Keep that domain working for as long as printed codes

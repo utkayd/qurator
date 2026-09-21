@@ -57,7 +57,7 @@ test('validation recovery, downloads, repeated edits and stale conflicts', async
   await expect(page.getByRole('heading', { name: 'Destination', exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Delete this code' }).click();
   await page.getByRole('button', { name: 'Confirm', exact: true }).click();
-  await expect(page).toHaveURL(`${app.origin}/ui/`);
+  await expect(page).toHaveURL(/\/ui\/(\?signed_in=1)?$/);
   expect(external).toEqual([]);
   expect(scriptErrors).toEqual([]);
 });

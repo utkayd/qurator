@@ -89,7 +89,13 @@ func (h *Handler) requireAuth(next http.HandlerFunc) http.HandlerFunc {
 		user, ok := h.deps.Auth.CurrentUser(r)
 		if !ok {
 			w.Header().Set("Cache-Control", "no-store")
-			http.Redirect(w, r, "/ui/signin", http.StatusFound)
+			target := "/ui/signin"
+			if r.URL.Query().Get(signedInMarker) == "1" {
+				// The sign-in form just succeeded, yet no session arrived: the
+				// browser rejected the cookie (a Secure cookie on plain http).
+				target += "?" + cookieRejectedMarker + "=1"
+			}
+			http.Redirect(w, r, target, http.StatusFound)
 			return
 		}
 		if !isSafeMethod(r.Method) && r.Header.Get(middleware.CSRFHeader) == "" {
@@ -205,12 +211,27 @@ type signInData struct {
 	Error string
 }
 
+// A successful sign-in redirects to the console with signedInMarker so requireAuth can
+// tell "the browser never stored the cookie" apart from an ordinary anonymous visit,
+// and bounce back to the sign-in page with cookieRejectedMarker, which renders
+// cookieRejectedMessage. Browsers drop a Secure cookie on any plain-http origin
+// other than loopback (F03), which used to look like a silent failed sign-in.
+const (
+	signedInMarker        = "signed_in"
+	cookieRejectedMarker  = "cookie"
+	cookieRejectedMessage = "Your browser rejected the session cookie. Serve qurator over HTTPS, or set QURATOR_SERVER_BASE_URL to your http:// origin."
+)
+
 func (h *Handler) getSignIn(w http.ResponseWriter, r *http.Request) {
 	if _, ok := h.deps.Auth.CurrentUser(r); ok {
 		http.Redirect(w, r, "/ui/", http.StatusFound)
 		return
 	}
-	h.render(w, r, http.StatusOK, "signin.html", "Sign in", signInData{})
+	data := signInData{}
+	if r.URL.Query().Get(cookieRejectedMarker) == "1" {
+		data.Error = cookieRejectedMessage
+	}
+	h.render(w, r, http.StatusOK, "signin.html", "Sign in", data)
 }
 
 func (h *Handler) postSignIn(w http.ResponseWriter, r *http.Request) {
@@ -229,7 +250,7 @@ func (h *Handler) postSignIn(w http.ResponseWriter, r *http.Request) {
 		h.render(w, r, http.StatusUnauthorized, "signin.html", "Sign in", signInData{Email: email, Error: msg})
 		return
 	}
-	http.Redirect(w, r, "/ui/", http.StatusSeeOther)
+	http.Redirect(w, r, "/ui/?"+signedInMarker+"=1", http.StatusSeeOther)
 }
 
 func (h *Handler) postSignOut(w http.ResponseWriter, r *http.Request) {

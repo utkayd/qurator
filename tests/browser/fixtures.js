@@ -55,7 +55,7 @@ async function signIn(page, app) {
   await page.getByLabel('Email', { exact: true }).fill(app.email);
   await page.getByLabel('Password', { exact: true }).fill(app.password);
   await page.getByRole('button', { name: 'Sign in', exact: true }).click();
-  await expect(page).toHaveURL(`${app.origin}/ui/`);
+  await expect(page).toHaveURL(/\/ui\/(\?signed_in=1)?$/);
 }
 
 module.exports = { test, expect, signIn };
