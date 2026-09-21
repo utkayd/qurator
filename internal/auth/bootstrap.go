@@ -12,7 +12,9 @@ import (
 
 // Bootstrap creates the one administrative account on first start (FR-032). It acts only
 // when the store holds zero users AND both email and password are configured; it never
-// recreates, resets, or consults a marker file. created reports whether it acted.
+// recreates, resets, or consults a marker file. created reports whether it acted. Warning
+// the operator about an empty, unconfigured instance is the caller's job: only it knows
+// whether another sign-in path (forward-auth) exists.
 func Bootstrap(ctx context.Context, st store.Store, email, password string) (created bool, err error) {
 	n, err := st.CountUsers(ctx)
 	if err != nil {
@@ -22,7 +24,6 @@ func Bootstrap(ctx context.Context, st store.Store, email, password string) (cre
 		return false, nil
 	}
 	if email == "" || password == "" {
-		slog.Warn("auth: no users exist and no bootstrap credentials are configured; nobody can sign in")
 		return false, nil
 	}
 	phc, err := HashPassword(password)

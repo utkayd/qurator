@@ -204,14 +204,15 @@ func run(ctx context.Context, args []string, lookupEnv func(string) (string, boo
 	if err != nil {
 		return fmt.Errorf("auth: %w", err)
 	}
-	if cfg.Auth.BootstrapEmail != "" {
-		created, err := auth.Bootstrap(ctx, st, cfg.Auth.BootstrapEmail, cfg.Auth.BootstrapPassword.Reveal())
-		if err != nil {
-			return fmt.Errorf("bootstrap admin: %w", err)
-		}
-		if created {
-			slog.Info("bootstrap admin created", "email", cfg.Auth.BootstrapEmail)
-		}
+	created, err := auth.Bootstrap(ctx, st, cfg.Auth.BootstrapEmail, cfg.Auth.BootstrapPassword.Reveal())
+	if err != nil {
+		return fmt.Errorf("bootstrap admin: %w", err)
+	}
+	if created {
+		slog.Info("bootstrap admin created", "email", cfg.Auth.BootstrapEmail)
+	}
+	if err := warnIfNobodyCanSignIn(ctx, st, cfg); err != nil {
+		return err
 	}
 	identity := func(r *http.Request) (string, bool) {
 		id, ok := auth.IdentityFrom(r.Context())
@@ -350,5 +351,28 @@ func run(ctx context.Context, args []string, lookupEnv func(string) (string, boo
 		slog.Warn("analytics flush", "err", err)
 	}
 	slog.Info("stopped")
+	return nil
+}
+
+// warnIfNobodyCanSignIn tells the operator when a fresh instance has no users and no
+// bootstrap credentials. With forward-auth enabled the proxy provisions users on their
+// first request, so sign-in works and only the admin role is missing; the warning says
+// that instead.
+func warnIfNobodyCanSignIn(ctx context.Context, st store.Store, cfg *config.Config) error {
+	if cfg.Auth.BootstrapEmail != "" && cfg.Auth.BootstrapPassword.Reveal() != "" {
+		return nil
+	}
+	n, err := st.CountUsers(ctx)
+	if err != nil {
+		return fmt.Errorf("bootstrap admin: count users: %w", err)
+	}
+	if n > 0 {
+		return nil
+	}
+	if cfg.ForwardAuth.Enabled {
+		slog.Warn("auth: no users exist and no bootstrap credentials are configured; forward-auth users will be provisioned on their first request but none will be admin")
+		return nil
+	}
+	slog.Warn("auth: no users exist and no bootstrap credentials are configured; nobody can sign in")
 	return nil
 }

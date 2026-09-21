@@ -73,7 +73,7 @@ func (f *fakeAuth) CurrentUser(r *http.Request) (domain.User, bool) {
 	return u, ok
 }
 
-func (f *fakeAuth) SignOut(w http.ResponseWriter, r *http.Request) {
+func (f *fakeAuth) SignOut(w http.ResponseWriter, r *http.Request) error {
 	if c, err := r.Cookie(fakeSessionCookie); err == nil {
 		f.mu.Lock()
 		delete(f.sessions, c.Value)
@@ -87,6 +87,7 @@ func (f *fakeAuth) SignOut(w http.ResponseWriter, r *http.Request) {
 		HttpOnly: true,
 		SameSite: http.SameSiteStrictMode,
 	})
+	return nil
 }
 
 // fakeCodes is an in-memory CodesService.

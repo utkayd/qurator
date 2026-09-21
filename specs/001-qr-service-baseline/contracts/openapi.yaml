@@ -872,6 +872,26 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '429':
           $ref: '#/components/responses/RateLimited'
+        '503':
+          description: |
+            `service_busy`: the instance is already verifying as many passwords as it
+            allows at once (each Argon2id verification pins 64 MiB). Nothing was checked;
+            retry after the `Retry-After` interval.
+          headers:
+            Retry-After:
+              schema:
+                type: integer
+              example: 1
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error:
+                  code: service_busy
+                  message: "Too many sign-in attempts are being verified right now; retry shortly."
+                  details:
+                    retry_after_s: 1
         '5XX':
           description: Unexpected server error.
           content:
@@ -883,12 +903,18 @@ paths:
     post:
       operationId: signOut
       tags: [auth]
-      summary: Sign out and clear the session cookie
+      summary: Sign out everywhere and clear the session cookie
+      description: |
+        Ends **every** session of the calling user, not only the one presented: the user's
+        token version is bumped, so any other copy of a session cookie (another browser, a
+        leaked or copied cookie) is refused from this moment on. The response also clears
+        the cookie in the calling browser. API tokens are unaffected; revoke those
+        individually via `DELETE /v1/tokens/{id}`. Sign in again to obtain a new session.
       parameters:
         - $ref: '#/components/parameters/CsrfHeader'
       responses:
         '204':
-          description: Signed out.
+          description: Signed out; all of the caller's sessions are invalid.
         '401':
           $ref: '#/components/responses/Unauthorized'
         '5XX':
@@ -1394,6 +1420,7 @@ components:
         - token_revoked
         - conflict
         - rate_limited
+        - service_busy
         - scan_url_not_configured
         - internal
 

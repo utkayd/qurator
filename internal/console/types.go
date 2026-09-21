@@ -88,8 +88,10 @@ type Authenticator interface {
 	// identity the auth middleware has already attached to its context). ok is false for
 	// an anonymous request.
 	CurrentUser(r *http.Request) (domain.User, bool)
-	// SignOut clears the session.
-	SignOut(w http.ResponseWriter, r *http.Request)
+	// SignOut ends every session of the caller server-side and clears the browser cookie.
+	// An error means the sessions could not be invalidated; the handler must not pretend
+	// the sign-out succeeded.
+	SignOut(w http.ResponseWriter, r *http.Request) error
 }
 
 // Deps wires the console to the rest of the system. Every field is required in
@@ -129,6 +131,10 @@ var (
 	ErrVersionConflict = errors.New("console: version conflict")
 	// ErrInvalidCredentials means SignIn was called with a wrong email/password.
 	ErrInvalidCredentials = errors.New("console: invalid credentials")
+	// ErrTemporarilyUnavailable means SignIn could not even be attempted because the
+	// instance's password-verification capacity is saturated; the handler answers 503 with
+	// Retry-After and the user simply tries again.
+	ErrTemporarilyUnavailable = errors.New("console: temporarily unavailable")
 	// ErrValidation means the input failed a domain validation rule (bad destination
 	// scheme, alias taken, contrast too low, etc). Implementations should wrap it with
 	// a safe, user-facing message via fmt.Errorf("%w: ...", ErrValidation).

@@ -62,6 +62,11 @@ func TestZeroConfig_EmptyEnvStartsAndPersistsSecret(t *testing.T) {
 	if strings.Contains(p.Stderr.String(), strings.TrimSpace(string(key1))) {
 		t.Fatal("the generated secret value appeared in the log output")
 	}
+	// F09: a zero-config start has no users and no bootstrap credentials, so nobody can
+	// sign in; the operator must be told rather than left to discover it at the sign-in form.
+	if !strings.Contains(p.Stderr.String(), "nobody can sign in") {
+		t.Errorf("zero-config start did not warn that nobody can sign in; stderr:\n%s", p.Stderr.String())
+	}
 	p.Signal(t, syscall.SIGTERM)
 	if code := p.Wait(t, 20*time.Second); code != 0 {
 		t.Fatalf("exit code %d after SIGTERM, want 0; stderr:\n%s", code, p.Stderr.String())
