@@ -14,7 +14,7 @@ import (
 
 // fakeAuth is an in-memory Authenticator. Sessions are tracked by an opaque cookie
 // value; there is no real cryptography here because these tests exercise the console's
-// own logic, not the auth stream's.
+// own logic, not internal/auth's.
 type fakeAuth struct {
 	mu       sync.Mutex
 	users    map[string]fakeUser // email -> user+password

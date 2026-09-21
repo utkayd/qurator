@@ -1,2 +1,2 @@
-// Package storetest — see specs/001-qr-service-baseline/plan.md for its role and boundaries.
+// Package storetest — see docs/design/001-qr-service-baseline/plan.md for its role and boundaries.
 package storetest

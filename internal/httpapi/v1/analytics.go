@@ -10,9 +10,9 @@ import (
 	"github.com/utkayd/qurator/internal/store"
 )
 
-// UserIDFunc extracts the authenticated user's ID from a request. The auth stream
-// supplies the real one (reading the identity the auth middleware attached to the
-// context); tests supply a header-driven stub. ok=false means no identity.
+// UserIDFunc extracts the authenticated user's ID from a request. main.go supplies one
+// that reads the identity the auth middleware attached to the context; tests supply a
+// header-driven stub. ok=false means no identity.
 type UserIDFunc func(r *http.Request) (userID string, ok bool)
 
 const (

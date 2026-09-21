@@ -9,11 +9,9 @@ import (
 	"github.com/utkayd/qurator/internal/store"
 )
 
-// IsAdminFunc reports whether r carries an already-authenticated admin identity. It is
-// injected rather than imported from the auth package so that this handler (Stream F)
-// does not need to depend on the auth stream's concrete identity type — the auth
-// middleware that runs ahead of this handler in the protected chain is what actually
-// establishes the identity; this func only reads what it left on the request.
+// IsAdminFunc reports whether r carries an already-authenticated admin identity; it is
+// injected so this handler reads the identity the auth middleware established without
+// depending on the auth package's concrete identity type.
 type IsAdminFunc func(*http.Request) bool
 
 // ExportHandler serves GET /v1/export: a streaming tar dump of the whole instance

@@ -18,8 +18,8 @@ import (
 // (research.md §4). Never 301/308.
 const NoStore = "no-store, no-cache, must-revalidate"
 
-// ClassifyFunc turns a User-Agent into the coarse fields a ScanEvent records. The
-// analytics stream supplies the real parser; the default records "unknown".
+// ClassifyFunc turns a User-Agent into the coarse fields a ScanEvent records.
+// internal/analytics supplies the real parser; the default records "unknown".
 type ClassifyFunc func(userAgent string) (family string, device domain.DeviceCategory, isBot bool)
 
 func defaultClassify(string) (string, domain.DeviceCategory, bool) {

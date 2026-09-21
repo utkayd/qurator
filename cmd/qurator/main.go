@@ -1,4 +1,4 @@
-// Command qurator is the single-binary QR service. See specs/001-qr-service-baseline/plan.md.
+// Command qurator is the single-binary QR service. See docs/design/001-qr-service-baseline/plan.md.
 package main
 
 import (
@@ -46,7 +46,7 @@ const (
 	flushBudget    = 5 * time.Second  // then flush analytics, separately bounded
 )
 
-// Flusher is implemented by the analytics pipeline; a no-op until Stream D lands.
+// Flusher is implemented by the analytics pipeline so shutdown can drain buffered scans.
 type Flusher interface {
 	Close(ctx context.Context) error
 }
@@ -192,7 +192,7 @@ func run(ctx context.Context, args []string, lookupEnv func(string) (string, boo
 
 	metrics := observability.NewMetrics()
 
-	// Identity (Stream C).
+	// Identity: session, token, and forward-auth resolution.
 	authn, err := auth.New(st, auth.AuthOptions{
 		SigningSecret: cfg.Auth.SigningSecret,
 		BaseURL:       cfg.Server.BaseURL,
@@ -218,7 +218,7 @@ func run(ctx context.Context, args []string, lookupEnv func(string) (string, boo
 		return id.UserID, ok
 	}
 
-	// Analytics pipeline (Stream D): non-blocking recorder, flushed at shutdown.
+	// Analytics pipeline: non-blocking recorder, flushed at shutdown.
 	recorder := analytics.NewRecorder(st, analytics.Options{
 		BufferSize:    cfg.Analytics.BufferSize,
 		BatchSize:     cfg.Analytics.BatchSize,
@@ -229,7 +229,7 @@ func run(ctx context.Context, args []string, lookupEnv func(string) (string, boo
 	go analytics.NewRetention(st, cfg.Analytics.RetentionDays, 1000).Run(ctx)
 	classifier := analytics.NewClassifier()
 
-	// QR rendering (Stream A): shared by the ephemeral endpoint and persisted codes.
+	// QR rendering: shared by the ephemeral endpoint and persisted codes.
 	qrRenderer := qr.NewRenderer(qr.Bounds{
 		MaxPx:       cfg.Render.MaxPx,
 		MaxDuration: cfg.Render.MaxDuration,
@@ -241,7 +241,7 @@ func run(ctx context.Context, args []string, lookupEnv func(string) (string, boo
 		return ok && id.IsAdmin
 	}
 
-	// Dynamic codes (Stream B).
+	// Dynamic and direct codes.
 	codeSvc := codes.NewService(st, bs, codesRenderer{qrRenderer}, codes.NewCache(), codes.Config{
 		BaseURL:        cfg.Server.BaseURL,
 		AllowedSchemes: cfg.Codes.AllowedSchemes,

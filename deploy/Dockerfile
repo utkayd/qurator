@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 #
 # Multi-stage, reproducible build for the single qurator binary (Constitution Principle
-# I). See specs/001-qr-service-baseline/research.md §6 for the reasoning behind every
+# I). See docs/design/001-qr-service-baseline/research.md §6 for the reasoning behind every
 # decision below; nothing here should be "obviously" changed without reading it first.
 
 # --- builder --------------------------------------------------------------------------

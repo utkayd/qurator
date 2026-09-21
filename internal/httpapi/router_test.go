@@ -21,7 +21,7 @@ func openAPIOperations(t *testing.T) map[string]bool {
 	t.Helper()
 	_, thisFile, _, _ := runtime.Caller(0)
 	root := filepath.Join(filepath.Dir(thisFile), "..", "..")
-	raw, err := os.ReadFile(filepath.Join(root, "specs/001-qr-service-baseline/contracts/openapi.yaml"))
+	raw, err := os.ReadFile(filepath.Join(root, "docs/design/001-qr-service-baseline/contracts/openapi.yaml"))
 	if err != nil {
 		t.Skipf("openapi.yaml not readable: %v", err)
 	}

@@ -8,7 +8,7 @@ import (
 
 // ErrorCode is a stable, machine-readable error identifier. Once shipped a code is part of
 // the API contract and must not be renamed or repurposed within a major version.
-// The catalogue lives in specs/001-qr-service-baseline/contracts/errors.md.
+// The catalogue lives in docs/design/001-qr-service-baseline/contracts/errors.md.
 type ErrorCode string
 
 const (
@@ -36,7 +36,7 @@ const (
 	CodeRateLimited                ErrorCode = "rate_limited"
 	CodeScanURLNotConfigured       ErrorCode = "scan_url_not_configured"
 	CodeInternal                   ErrorCode = "internal"
-	CodeNotImplemented             ErrorCode = "not_implemented" // foundation stubs only
+	CodeNotImplemented             ErrorCode = "not_implemented" // routes with no handler wired
 )
 
 // Status returns the HTTP status conventionally paired with a code.

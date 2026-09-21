@@ -335,3 +335,8 @@ CI runs both: the Docker-free suite on every push and PR
 (`.github/workflows/ci.yml`), and the same Postgres/S3 suites against real service
 containers (`.github/workflows/contract-tests.yml`) so nothing that's skipped locally
 goes unexercised entirely.
+
+The design documents each feature was built from — specifications, plans, research
+notes, and the OpenAPI and error-catalogue contracts — live in
+[`docs/design/`](docs/design/README.md). They record why the code looks the way it does;
+the standing engineering rules distilled from them are in [`AGENTS.md`](AGENTS.md).
