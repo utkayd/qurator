@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"regexp"
@@ -315,6 +316,8 @@ func serviceErrorDetail(err error) (d httpapi.ErrorDetail, ok bool) {
 		return e(httpapi.CodeUnsupportedScheme, "The destination uses a scheme this instance does not permit.", details)
 	case errors.Is(err, codes.ErrSelfReferential):
 		return e(httpapi.CodeSelfReferentialDestination, "The destination points back at this instance's scan path.", nil)
+	case errors.Is(err, codes.ErrDestinationTooLong):
+		return e(httpapi.CodeInvalidRequest, fmt.Sprintf("The destination must be at most %d characters.", codes.MaxDestinationLength), details)
 	case errors.Is(err, codes.ErrInvalidDestination):
 		return e(httpapi.CodeInvalidRequest, "The destination is not a valid absolute URL.", details)
 	case errors.Is(err, codes.ErrAliasReserved):

@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -247,5 +248,34 @@ func TestSigninLimiterSharedAcrossConsoleAndAPI(t *testing.T) {
 		if rec.Code != http.StatusOK {
 			t.Errorf("unrelated GET %s was throttled: %d", path, rec.Code)
 		}
+	}
+}
+
+// F17: an unknown /v1/ path must answer with the JSON error envelope (FR-044), not
+// Go's plain-text "404 page not found". A known path with the wrong method still
+// reports 405 with an Allow header.
+func TestUnknownV1PathReturnsJSONNotFound(t *testing.T) {
+	h := NewRouter(Handlers{}, Options{})
+	for _, path := range []string{"/v1/nope", "/v1/codes/abc/analytics/extra", "/v1/"} {
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, path, nil))
+		if rr.Code != http.StatusNotFound {
+			t.Fatalf("%s: status %d, want 404", path, rr.Code)
+		}
+		if ct := rr.Header().Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {
+			t.Fatalf("%s: Content-Type %q, want application/json", path, ct)
+		}
+		var body ErrorBody
+		if err := json.NewDecoder(rr.Body).Decode(&body); err != nil {
+			t.Fatalf("%s: body is not the error envelope: %v", path, err)
+		}
+		if body.Error.Code != CodeNotFound {
+			t.Fatalf("%s: code %q, want not_found", path, body.Error.Code)
+		}
+	}
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, httptest.NewRequest(http.MethodPut, "/v1/codes", nil))
+	if rr.Code != http.StatusMethodNotAllowed || rr.Header().Get("Allow") == "" {
+		t.Fatalf("PUT /v1/codes: status %d Allow=%q, want 405 with Allow", rr.Code, rr.Header().Get("Allow"))
 	}
 }

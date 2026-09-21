@@ -294,6 +294,28 @@ func TestCodes_DestinationValidation(t *testing.T) {
 	if code, _ := errCodeCodes(t, body); res.StatusCode != http.StatusBadRequest || code != "invalid_request" {
 		t.Fatalf("missing destination: %d %v", res.StatusCode, body)
 	}
+	// F13: destinations are capped at codes.MaxDestinationLength; one past the cap is
+	// rejected with invalid_request and the cap reported in details.
+	long := "https://example.com/" + strings.Repeat("a", codes.MaxDestinationLength)
+	res, body = f.do(t, "alice", http.MethodPost, "/v1/codes", map[string]any{"destination": long}, nil)
+	if code, details := errCodeCodes(t, body); res.StatusCode != http.StatusBadRequest || code != "invalid_request" || details["field"] != "destination" || details["max_length"] != float64(codes.MaxDestinationLength) {
+		t.Fatalf("over-long destination: %d %v", res.StatusCode, body)
+	}
+	atCap := "https://example.com/" + strings.Repeat("a", codes.MaxDestinationLength-len("https://example.com/"))
+	f.create(t, "alice", map[string]any{"destination": atCap})
+	// The cap counts characters, not bytes: a multi-byte destination at the cap is
+	// accepted even though it exceeds the cap in bytes.
+	multiByte := "https://example.com/" + strings.Repeat("é", codes.MaxDestinationLength-len("https://example.com/"))
+	if len(multiByte) <= codes.MaxDestinationLength {
+		t.Fatalf("multi-byte fixture must exceed the cap in bytes, got %d", len(multiByte))
+	}
+	f.create(t, "alice", map[string]any{"destination": multiByte})
+	// PATCH goes through the same validator.
+	created := f.create(t, "alice", map[string]any{"destination": "https://example.com/"})
+	res, body = f.do(t, "alice", http.MethodPatch, "/v1/codes/"+created["id"].(string), map[string]any{"destination": long}, nil)
+	if code, _ := errCodeCodes(t, body); res.StatusCode != http.StatusBadRequest || code != "invalid_request" {
+		t.Fatalf("over-long destination on PATCH: %d %v", res.StatusCode, body)
+	}
 	res, body = f.do(t, "alice", http.MethodPost, "/v1/codes", map[string]any{"destination": "https://example.com/", "extra": 1}, nil)
 	if code, _ := errCodeCodes(t, body); res.StatusCode != http.StatusBadRequest || code != "invalid_request" {
 		t.Fatalf("unknown field: %d %v", res.StatusCode, body)

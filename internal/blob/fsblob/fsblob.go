@@ -43,7 +43,9 @@ type meta struct {
 	Size        int64  `json:"size"`
 }
 
-// Open creates the root directory if needed and returns the driver.
+// Open creates the root directory if needed and returns the driver. Directories are
+// created 0700: a pre-existing 0755 data directory must not expose stored images to
+// other local users.
 func Open(root string) (*Store, error) {
 	if root == "" {
 		return nil, errors.New("fsblob: empty path")
@@ -53,7 +55,7 @@ func Open(root string) (*Store, error) {
 		return nil, fmt.Errorf("fsblob: resolve root: %w", err)
 	}
 	for _, d := range []string{filepath.Join(abs, "objects"), filepath.Join(abs, "meta")} {
-		if err := os.MkdirAll(d, 0o750); err != nil {
+		if err := os.MkdirAll(d, 0o700); err != nil {
 			return nil, fmt.Errorf("fsblob: create %s: %w", d, err)
 		}
 	}
@@ -93,10 +95,10 @@ func (s *Store) Put(ctx context.Context, key string, r io.Reader, size int64, co
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
-	if err := os.MkdirAll(filepath.Dir(objPath), 0o750); err != nil {
+	if err := os.MkdirAll(filepath.Dir(objPath), 0o700); err != nil {
 		return "", fmt.Errorf("fsblob: mkdir: %w", err)
 	}
-	if err := os.MkdirAll(filepath.Dir(metaPath), 0o750); err != nil {
+	if err := os.MkdirAll(filepath.Dir(metaPath), 0o700); err != nil {
 		return "", fmt.Errorf("fsblob: mkdir: %w", err)
 	}
 

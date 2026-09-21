@@ -18,7 +18,9 @@ later start, and serves on `:8080`.
 
 Everything the instance needs lives under `./data`: the database, the blobs, and
 `signing.key`. Back them up together — restoring the database without the key signs
-every user out. If you would rather manage the secret yourself, set
+every user out. The files under `data/` must stay owned by, or be restored to, the
+account that runs qurator, since the database is kept at mode `0600`. If you would
+rather manage the secret yourself, set
 `QURATOR_AUTH_SIGNING_SECRET` and the file is never created; if the data directory
 (`QURATOR_SERVER_DATA_DIR`) can't be written and no secret is set, qurator refuses to
 start rather than run with a guessable key.

@@ -6,6 +6,7 @@ import (
 	"io"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/utkayd/qurator/internal/domain"
 	"github.com/utkayd/qurator/internal/httpapi/middleware"
@@ -42,9 +43,26 @@ func newUserView(u domain.User) *UserView {
 }
 
 var templateFuncs = template.FuncMap{
-	"trendChart": renderTrendChart,
-	"codeMode":   codeMode,
-	"relTime":    relTime,
+	"trendChart":      renderTrendChart,
+	"codeMode":        codeMode,
+	"relTime":         relTime,
+	"listDestination": listDestination,
+}
+
+// listDestinationMax bounds how much of a destination the codes list shows. The API
+// caps destinations at codes.MaxDestinationLength characters, which is still far more
+// than a table cell can use; the detail page shows the full value.
+const listDestinationMax = 120
+
+func listDestination(s string) string { return truncate(s, listDestinationMax) }
+
+// truncate cuts s to at most max runes and appends an ellipsis when it did cut.
+func truncate(s string, max int) string {
+	if utf8.RuneCountInString(s) <= max {
+		return s
+	}
+	r := []rune(s)
+	return string(r[:max]) + "…"
 }
 
 // relTime renders t as a short, human relative time ("3h ago", "12d ago"); older than

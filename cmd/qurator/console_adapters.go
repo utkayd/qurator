@@ -117,6 +117,8 @@ func translateCodesErr(err error) error {
 		return fmt.Errorf("%w: the destination must use an allowed scheme", console.ErrValidation)
 	case errors.Is(err, codes.ErrSelfReferential):
 		return fmt.Errorf("%w: the destination cannot point back at this instance", console.ErrValidation)
+	case errors.Is(err, codes.ErrDestinationTooLong):
+		return fmt.Errorf("%w: the destination must be at most %d characters", console.ErrValidation, codes.MaxDestinationLength)
 	case errors.Is(err, codes.ErrInvalidDestination):
 		return fmt.Errorf("%w: the destination is not a valid URL", console.ErrValidation)
 	case errors.Is(err, codes.ErrInvalidStyling):
