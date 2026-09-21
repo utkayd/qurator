@@ -43,8 +43,8 @@ func runHealthcheck(args []string, lookupEnv func(string) (string, bool), stdout
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+net.JoinHostPort(host, port)+path, nil)
-	resp, err := http.DefaultClient.Do(req)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+net.JoinHostPort(host, port)+path, nil) //nolint:gosec // G704: host and port are the operator's own server.listen from config, never request input
+	resp, err := http.DefaultClient.Do(req)                                                                     //nolint:gosec // G704: same operator-configured local target as above
 	if err != nil {
 		return fmt.Errorf("healthcheck: %w", err)
 	}
