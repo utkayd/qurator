@@ -10,7 +10,7 @@ require (
 	github.com/knadh/koanf/providers/env v1.1.0
 	github.com/knadh/koanf/providers/file v1.2.1
 	github.com/knadh/koanf/providers/posflag v1.0.2
-	github.com/knadh/koanf/v2 v2.3.6
+	github.com/knadh/koanf/v2 v2.3.7
 	github.com/makiuchi-d/gozxing v0.1.1
 	github.com/maypok86/otter/v2 v2.3.0
 	github.com/medama-io/go-useragent v1.2.5
