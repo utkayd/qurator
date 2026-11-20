@@ -32,7 +32,7 @@ func TestStatusMapping(t *testing.T) {
 	cases := map[ErrorCode]int{
 		CodeInvalidRequest: 400, CodeContentTooLarge: 413, CodeAliasTaken: 409, CodeAliasReserved: 409,
 		CodeNotFound: 404, CodeCodeDisabled: 410, CodeUnauthorized: 401, CodeTokenRevoked: 401,
-		CodeForbidden: 403, CodeConflict: 409, CodeRateLimited: 429, CodeInternal: 500,
+		CodeForbidden: 403, CodeConflict: 409, CodeRateLimited: 429, CodeServiceBusy: 503, CodeInternal: 500,
 	}
 	for c, want := range cases {
 		if got := c.Status(); got != want {

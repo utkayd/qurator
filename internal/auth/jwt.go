@@ -88,6 +88,20 @@ func CookieSecureForBaseURL(baseURL string) bool {
 	return !strings.EqualFold(u.Scheme, "http")
 }
 
+// RevokeSessions invalidates every session the user currently holds by bumping the
+// user's token_version, which every session JWT carries as tv and verifySession compares.
+// The user is also evicted from this process's positive cache so the bump takes effect on
+// the very next request here rather than after a cache TTL; another instance sharing the
+// store converges within its own TTL. Sign-out calls this: for a single-operator tool,
+// "sign out everywhere" is the behaviour a leaked or copied cookie demands.
+func (a *Authenticator) RevokeSessions(ctx context.Context, userID string) error {
+	if _, err := a.store.BumpTokenVersion(ctx, userID); err != nil {
+		return fmt.Errorf("auth: revoke sessions: %w", err)
+	}
+	a.users.evict(userID)
+	return nil
+}
+
 // SessionCookie builds the cookie carrying a signed session: HttpOnly; SameSite=Strict;
 // Path=/ and no Domain (host-only, instance-scoped per FR-031); Secure unless the
 // configured base URL is plain http (CookieSecureForBaseURL).

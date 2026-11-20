@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/url"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/utkayd/qurator/internal/domain"
 )
@@ -14,6 +15,9 @@ var (
 	validDBDrivers   = map[string]bool{"sqlite": true, "postgres": true}
 	validBlobDrivers = map[string]bool{"fs": true, "s3": true}
 )
+
+// minBootstrapPasswordLen is the shortest bootstrap admin password accepted at startup.
+const minBootstrapPasswordLen = 12
 
 // Validate checks c for every constraint required before qurator may
 // start, returning every violation found joined via errors.Join rather
@@ -110,6 +114,15 @@ func (c *Config) Validate() error {
 	if (c.Auth.BootstrapEmail != "") != c.Auth.BootstrapPassword.IsSet() {
 		errs = append(errs, errors.New(
 			"config: auth.bootstrap_email and auth.bootstrap_password must both be set, or both left empty"))
+	}
+	// The bootstrap account is the only way into a fresh instance and there is no
+	// password reset (FR-039), so a typo here is expensive and a weak value is an
+	// exposed admin. Refuse the obvious mistakes at startup rather than create them.
+	if c.Auth.BootstrapEmail != "" && !strings.Contains(c.Auth.BootstrapEmail, "@") {
+		errs = append(errs, fmt.Errorf("config: auth.bootstrap_email %q is not an email address (no @)", c.Auth.BootstrapEmail))
+	}
+	if c.Auth.BootstrapPassword.IsSet() && utf8.RuneCountInString(c.Auth.BootstrapPassword.Reveal()) < minBootstrapPasswordLen {
+		errs = append(errs, fmt.Errorf("config: auth.bootstrap_password must be at least %d characters", minBootstrapPasswordLen))
 	}
 
 	if _, err := parseLogLevel(c.Log.Level); err != nil {

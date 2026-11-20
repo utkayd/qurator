@@ -152,6 +152,7 @@ func (a *Authenticator) userByID(ctx context.Context, id string) (*domain.User, 
 	if u, ok := a.users.get(id); ok {
 		return u, nil
 	}
+	generation := a.users.currentGeneration()
 	u, err := a.store.GetUserByID(ctx, id)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
@@ -159,6 +160,6 @@ func (a *Authenticator) userByID(ctx context.Context, id string) (*domain.User, 
 		}
 		return nil, fmt.Errorf("auth: user lookup: %w", err)
 	}
-	a.users.put(id, u)
+	a.users.putIfGeneration(id, u, generation)
 	return u, nil
 }

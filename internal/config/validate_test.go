@@ -291,9 +291,41 @@ func TestValidate_Rules(t *testing.T) {
 			name: "bootstrap email and password together is fine",
 			mutate: func(c *Config) {
 				c.Auth.BootstrapEmail = "admin@example.com"
-				c.Auth.BootstrapPassword = Secret("s3cret")
+				c.Auth.BootstrapPassword = Secret("correct horse battery staple")
 			},
 			wantErr: "",
+		},
+		{
+			name: "bootstrap password of exactly 12 characters is fine",
+			mutate: func(c *Config) {
+				c.Auth.BootstrapEmail = "admin@example.com"
+				c.Auth.BootstrapPassword = Secret("abcdefghijkl")
+			},
+			wantErr: "",
+		},
+		{
+			name: "bootstrap password shorter than 12 characters",
+			mutate: func(c *Config) {
+				c.Auth.BootstrapEmail = "admin@example.com"
+				c.Auth.BootstrapPassword = Secret("a")
+			},
+			wantErr: "auth.bootstrap_password must be at least 12 characters",
+		},
+		{
+			name: "bootstrap password of 11 characters",
+			mutate: func(c *Config) {
+				c.Auth.BootstrapEmail = "admin@example.com"
+				c.Auth.BootstrapPassword = Secret("abcdefghijk")
+			},
+			wantErr: "auth.bootstrap_password must be at least 12 characters",
+		},
+		{
+			name: "bootstrap email without an @",
+			mutate: func(c *Config) {
+				c.Auth.BootstrapEmail = "notanemail"
+				c.Auth.BootstrapPassword = Secret("correct horse battery staple")
+			},
+			wantErr: "auth.bootstrap_email",
 		},
 		{
 			name:    "unparseable log level",

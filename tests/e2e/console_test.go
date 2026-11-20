@@ -91,13 +91,14 @@ func (a *e2eAuth) CurrentUser(r *http.Request) (domain.User, bool) {
 	return u, ok
 }
 
-func (a *e2eAuth) SignOut(w http.ResponseWriter, r *http.Request) {
+func (a *e2eAuth) SignOut(w http.ResponseWriter, r *http.Request) error {
 	if c, err := r.Cookie(sessionCookieName); err == nil {
 		a.mu.Lock()
 		delete(a.sessions, c.Value)
 		a.mu.Unlock()
 	}
 	http.SetCookie(w, &http.Cookie{Name: sessionCookieName, Value: "", Path: "/", MaxAge: -1})
+	return nil
 }
 
 type e2eCodes struct {

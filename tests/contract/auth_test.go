@@ -358,6 +358,83 @@ func TestSignout(t *testing.T) {
 	}
 }
 
+// TestSignoutInvalidatesEverySession pins that sign-out ends the session server-side, not
+// just in the browser: the signed-out cookie is refused immediately, and so is every other
+// session the same user held (F04; openapi.yaml signOut).
+func TestSignoutInvalidatesEverySession(t *testing.T) {
+	e := newEnv(t)
+	first := e.signin(userEmail)
+	second := e.signin(userEmail)
+	for _, c := range []*http.Cookie{first, second} {
+		if rec := e.do(http.MethodGet, "/v1/auth/me", nil, withCookie(c)); rec.Code != http.StatusOK {
+			t.Fatalf("me before signout: %d %s", rec.Code, rec.Body.String())
+		}
+	}
+	if rec := e.do(http.MethodPost, "/v1/auth/signout", nil, withCookie(first), withCSRF); rec.Code != http.StatusNoContent {
+		t.Fatalf("signout: %d %s", rec.Code, rec.Body.String())
+	}
+	for name, c := range map[string]*http.Cookie{"signed-out cookie": first, "other session": second} {
+		rec := e.do(http.MethodGet, "/v1/auth/me", nil, withCookie(c))
+		if rec.Code != http.StatusUnauthorized || errCodeAuth(t, rec) != "unauthorized" {
+			t.Fatalf("%s still accepted after signout: %d %s", name, rec.Code, rec.Body.String())
+		}
+	}
+	// A fresh sign-in works again and yields a session that verifies.
+	fresh := e.signin(userEmail)
+	if rec := e.do(http.MethodGet, "/v1/auth/me", nil, withCookie(fresh)); rec.Code != http.StatusOK {
+		t.Fatalf("me after fresh signin: %d %s", rec.Code, rec.Body.String())
+	}
+	// Another user's sessions are untouched.
+	adminCookie := e.signin(adminEmail)
+	if rec := e.do(http.MethodPost, "/v1/auth/signout", nil, withCookie(fresh), withCSRF); rec.Code != http.StatusNoContent {
+		t.Fatalf("second signout: %d", rec.Code)
+	}
+	if rec := e.do(http.MethodGet, "/v1/auth/me", nil, withCookie(adminCookie)); rec.Code != http.StatusOK {
+		t.Fatalf("admin session must survive another user's signout: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestSigninVerifyGateSaturated pins the process-wide Argon2id concurrency cap (F15): when
+// every verification slot is busy, sign-in answers 503 with Retry-After instead of queueing
+// another 64 MiB KDF, and it does so for an unknown email too (no existence oracle).
+func TestSigninVerifyGateSaturated(t *testing.T) {
+	e := newEnv(t)
+	var releases []func()
+	for i := 0; i < auth.DefaultVerifySlots; i++ {
+		release, ok := e.a.AcquireVerifySlot()
+		if !ok {
+			t.Fatalf("slot %d must be free", i+1)
+		}
+		t.Cleanup(release)
+		releases = append(releases, release)
+	}
+	for _, body := range []map[string]string{
+		{"email": adminEmail, "password": password},
+		{"email": "nobody@example.com", "password": password},
+	} {
+		rec := e.do(http.MethodPost, "/v1/auth/signin", body)
+		if rec.Code != http.StatusServiceUnavailable || errCodeAuth(t, rec) != "service_busy" {
+			t.Fatalf("saturated signin %v: %d %s", body, rec.Code, rec.Body.String())
+		}
+		if rec.Header().Get("Retry-After") == "" {
+			t.Fatal("503 must carry Retry-After")
+		}
+		if rec.Header().Get("Set-Cookie") != "" {
+			t.Fatal("saturated signin must not set a cookie")
+		}
+	}
+	// Validation failures never need a slot, so they are unaffected.
+	if rec := e.do(http.MethodPost, "/v1/auth/signin", map[string]string{"email": adminEmail}); rec.Code != http.StatusBadRequest {
+		t.Fatalf("missing password while saturated: %d", rec.Code)
+	}
+	for _, release := range releases {
+		release()
+	}
+	if rec := e.do(http.MethodPost, "/v1/auth/signin", map[string]string{"email": adminEmail, "password": password}); rec.Code != http.StatusOK {
+		t.Fatalf("signin after release: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestAdminReleaseAlias(t *testing.T) {
 	e := newEnv(t)
 	ctx := context.Background()
