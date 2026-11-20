@@ -2,7 +2,8 @@
 
 A self-hosted, single-binary dynamic QR code service. Generate QR codes whose
 destination can change after they're printed, track scans without ever storing a
-scanner's IP address, and walk away with your data in one command whenever you want.
+scanner's IP address, and take your data with you whenever you want: the metadata as
+one portable export file, or everything as a copy of a single directory.
 
 ## Start here: one command, zero configuration
 
@@ -137,8 +138,16 @@ a convention — so "ephemeral" actually means ephemeral.
 
 Nothing about the API or behavior changes; only where the bytes live does.
 
+`deploy/compose.yaml` is a local stack for exercising this path: PostgreSQL 16, MinIO,
+and a qurator container built from this tree that points at both. Its `qurator`
+service carries placeholder bootstrap credentials and base URL
+(`QURATOR_AUTH_BOOTSTRAP_EMAIL`, `QURATOR_AUTH_BOOTSTRAP_PASSWORD`,
+`QURATOR_SERVER_BASE_URL`); edit them before the first `up`, since the bootstrap
+account is created once against the empty database. You can also bring up only the
+two backends and run the binary you built yourself against them:
+
 ```bash
-docker compose -f deploy/compose.yaml up -d     # PostgreSQL 16 + MinIO, for local use
+docker compose -f deploy/compose.yaml up -d postgres minio   # backends only, for local use
 
 QURATOR_DB_DRIVER=postgres \
 QURATOR_DB_DSN='postgres://qurator:qurator@localhost:5432/qurator?sslmode=disable' \
@@ -256,13 +265,14 @@ curl -s -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
 - No geographic analytics in v1. It was deliberately cut: every plausible source of
   geo data (IP geolocation databases, third-party APIs) would have made an external
   dependency compulsory, which Principle I forbids.
-- No telemetry leaves your instance. `/metrics` is Prometheus-format and, by default,
-  bound only to `127.0.0.1` on a separate internal port — not exposed on the public
-  listener at all unless you explicitly configure `QURATOR_SERVER_METRICS_LISTEN`.
+- No telemetry leaves your instance. `/metrics` is Prometheus-format and disabled by
+  default: it is never mounted on the public listener, and nothing serves it at all
+  until you set `QURATOR_SERVER_METRICS_LISTEN` to a separate internal address (for
+  example `127.0.0.1:9090`).
 
 ## Export and import
 
-Walk away with everything, in one file, at any time:
+Take your metadata with you, in one file, at any time:
 
 ```bash
 ./bin/qurator export --out ./dump/          # writes ./dump/export.tar
@@ -275,12 +285,20 @@ entity — never a backend-specific SQL dump, so it round-trips across a SQLite-
 upgrade unchanged. It streams in both directions: exporting a store with a million rows
 does not hold a million rows in memory at once.
 
-**What it deliberately leaves out, and why:**
+**The export is metadata only.** It contains the rows behind your codes, scans, users,
+and tokens, but no rendered images, no uploaded logos, no password hashes, and no
+token secrets. What it deliberately leaves out, and why:
 
-- User passwords and API token secrets are never written to an export. A user restored
-  from an export has no usable local password until one is reset (or simply use
-  forward-auth for it); a restored token record is informational only — it cannot
-  authenticate, and re-importing one does not attempt to.
+- Images and logos are not in the archive. Rendered code images and uploaded logos are
+  blobs that live in the blob store and must be restored from a copy of it. Until they
+  are, a restored code's image URL returns 404; its redirect keeps working.
+- User passwords and API token secrets are never written to an export. A restored
+  instance keeps the users from the archive, but local users have no password after
+  import and there is no password-reset command: forward-auth is the way back in for
+  those accounts. Bootstrap credentials cannot help after the fact — they only act on
+  an empty store, before the import, and only for an email that is absent from the
+  archive. A restored token record is informational only — it cannot authenticate,
+  and re-importing one does not attempt to.
 - `import` refuses to run against a store that already has users, unless you pass
   `--force` — it's an "into a fresh instance" tool, not a merge tool.
 
@@ -289,6 +307,15 @@ The same dump is also available live over HTTP, admin-only:
 ```bash
 curl -fsS -H "Authorization: Bearer $ADMIN_TOKEN" localhost:8080/v1/export -o export.tar
 ```
+
+**For a complete backup, copy the data directory instead.** In zero-config mode
+everything qurator owns lives under `./data/`: the SQLite database, the blob store
+(`data/blobs/`, including logos), and `data/signing.key`, which signs console sessions
+(API tokens are stored hashed in the database and do not depend on it). Back those up
+together, with the service stopped, and restoring that directory
+restores the instance exactly, credentials included. With PostgreSQL and S3, the
+equivalent is a database backup, a bucket copy, and the signing key (or the
+`QURATOR_AUTH_SIGNING_SECRET` you configured) taken together.
 
 ## Build from source
 
@@ -335,3 +362,11 @@ CI runs both: the Docker-free suite on every push and PR
 (`.github/workflows/ci.yml`), and the same Postgres/S3 suites against real service
 containers (`.github/workflows/contract-tests.yml`) so nothing that's skipped locally
 goes unexercised entirely.
+
+## License
+
+qurator is released under the [MIT License](LICENSE).
+
+The vendored htmx library in `internal/console/assets/vendor/` is distributed
+under its own Zero-Clause BSD (0BSD) license; see
+`internal/console/assets/vendor/htmx-LICENSE`.

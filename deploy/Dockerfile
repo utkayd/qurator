@@ -62,7 +62,8 @@ FROM gcr.io/distroless/static-debian13@${BASE_DIGEST} AS final
 ARG BASE_DIGEST=sha256:1c2c046bc09ed40fad370b599a0b1ae7987f55b01e247cf27a7c27cd97e5bbc7
 LABEL org.opencontainers.image.source="https://github.com/utkayd/qurator" \
       org.opencontainers.image.base.digest="${BASE_DIGEST}" \
-      org.opencontainers.image.description="Self-hosted, single-binary dynamic QR code service"
+      org.opencontainers.image.description="Self-hosted, single-binary dynamic QR code service" \
+      org.opencontainers.image.licenses="MIT"
 
 # The distroless nonroot variant already ships a "nonroot" user (UID 65532); USER here
 # is what actually applies it to the running container rather than only being present.
